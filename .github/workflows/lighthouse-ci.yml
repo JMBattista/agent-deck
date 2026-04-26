@@ -1,0 +1,60 @@
+# Lighthouse CI: enforces performance budgets on every PR touching web code.
+#
+# Hard gates (block merge): total-byte-weight, resource-summary:script:size, cumulative-layout-shift
+# Soft warnings (surface only): FCP, LCP, TBT, Speed Index
+#
+# Thresholds calibrated from 10 baseline runs on main; see tests/lighthouse/README.md.
+# To recalibrate after perf changes: ./tests/lighthouse/calibrate.sh
+#
+# The `--no-tui` flag (added in v1.7.70) lets `agent-deck web` start in headless
+# CI without the bubbletea cancel-reader trying to attach to a non-existent TTY.
+
+name: Lighthouse CI
+
+on:
+  pull_request:
+    paths:
+      - 'internal/web/**'
+      - '.lighthouserc.json'
+      - 'tests/lighthouse/**'
+      - '.github/workflows/lighthouse-ci.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: lighthouse-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lighthouse:
+    name: Performance Budget
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+
+      - name: Build agent-deck
+        env:
+          GOTOOLCHAIN: go1.24.0
+        run: make build
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v12
+        with:
+          configPath: .lighthouserc.json
+          uploadArtifacts: true
+          temporaryPublicStorage: true
