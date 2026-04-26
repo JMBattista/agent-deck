@@ -1,7 +1,27 @@
 # Lighthouse CI
 
 Performance budget enforcement for the agent-deck web app. Lighthouse CI runs
-on every PR that touches `internal/web/**` or `.lighthouserc.json`.
+on every PR that touches `internal/web/**`, `.lighthouserc.json`,
+`tests/lighthouse/**`, or the workflow file itself.
+
+## Two-layer gating
+
+1. **Absolute thresholds** (`.lighthouserc.json` `ci.assert.assertions`). Coarse
+   upper bound, recalibrated whenever the bundle moves materially. See
+   "Threshold Tiers" below and "Recalibrating Thresholds" further down.
+2. **Delta gate** (`tests/lighthouse/compare-deltas.mjs`). Blocks any single
+   PR that grows `total-byte-weight` or `resource-summary:script:size` by more
+   than `MAX_BYTE_WEIGHT_DELTA_PCT` / `MAX_SCRIPT_SIZE_DELTA_PCT` (default 5%
+   each, set in `.github/workflows/lighthouse-ci.yml`). The workflow runs
+   `lhci collect` twice — once on the PR head, once on the base ref — and
+   compares medians. This is the answer to the v1.7.42 audit pattern where the
+   absolute budget went stale, every PR was over budget, and the gate was
+   disabled rather than recalibrated. Slow growth is fine; a single PR that
+   doubles the bundle is not.
+
+   The delta gate skips with a logged warning when no base data is available
+   (e.g. the base ref predates the workflow). Run-of-the-mill PRs after the
+   workflow lands on `main` exercise the full gate.
 
 ## Threshold Tiers
 
@@ -27,13 +47,19 @@ is unavailable).
 
 ## How CI Works
 
-1. PR touches `internal/web/**` or `.lighthouserc.json`
-2. GitHub Actions workflow `.github/workflows/lighthouse-ci.yml` triggers
-3. Workflow builds the Go binary with `GOTOOLCHAIN=go1.24.0`
-4. `treosh/lighthouse-ci-action@v12` reads `.lighthouserc.json`
-5. LHCI starts the test server via `startServerCommand`
-6. LHCI runs 5 Lighthouse collections (median used for assertions)
-7. LHCI asserts thresholds: `error` failures cause non-zero exit (check fails)
+1. PR touches `internal/web/**`, `.lighthouserc.json`, `tests/lighthouse/**`,
+   or `.github/workflows/lighthouse-ci.yml`.
+2. The workflow checks out the PR head and the base ref into separate
+   directories and builds both binaries (`GOTOOLCHAIN=go1.24.0 make build`).
+3. `lhci collect` runs against the PR-head server (with `--no-tui`).
+4. `lhci collect` runs against the base server (best-effort; failures are
+   non-fatal so the PR still benefits from the absolute threshold check).
+5. `lhci assert` runs against the PR-head reports, enforcing the absolute
+   thresholds in `.lighthouserc.json`.
+6. `tests/lighthouse/compare-deltas.mjs` reads both result dirs, takes the
+   median per metric, and fails if `total-byte-weight` or `script:size` grew
+   by more than `MAX_*_DELTA_PCT` (default 5%). Skipped with a warning when no
+   base data is present.
 8. Results uploaded to `temporary-public-storage` (public link in check output)
 9. HTML report artifacts attached to the workflow run
 
