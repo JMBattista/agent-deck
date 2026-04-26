@@ -78,6 +78,40 @@ Any commit modifying `internal/watcher/layout.go` or `internal/session/watcher_m
 bash scripts/verify-watcher-framework.sh
 ```
 
+## Performance regression: mandatory test coverage
+
+Agent-deck has a recurring complaint that lifecycle operations (cold start, group create/delete) drift slower release-over-release. **As of v1.7.x, hot-path walltime is permanently test-gated.**
+
+### Required tests
+
+Any PR modifying performance-sensitive lifecycle paths MUST run:
+
+```bash
+GOTOOLCHAIN=go1.24.0 PERF_BUDGET_MULTIPLIER=2.0 \
+  go test -run '^TestPerf_' -race -count=1 -timeout 60s \
+  ./cmd/agent-deck/... ./internal/session/...
+```
+
+CI runs this as `.github/workflows/perf-smoke.yml`. Either red blocks the PR.
+
+### Paths under the mandate
+
+- `cmd/agent-deck/main.go`
+- `internal/session/groups.go`
+- `internal/testutil/perfbudget.go`
+- `**/*_perf_test.go`
+- `.github/workflows/perf-smoke.yml`
+
+### Budget changes require an RFC
+
+- Loosening any `TestPerf_*` budget by more than 25% requires an RFC at `docs/rfc/PERF_BUDGETS.md` documenting the cause and the upper bound.
+- Removing a `TestPerf_*` test is forbidden without an RFC.
+- Adding a budget MUST cite the local median and use 5–10× headroom.
+
+### Track A vs Track B
+
+`Benchmark*` functions are advisory (no `-race`, run via `make bench`). `TestPerf_*` are hard-gated walltime regressions that never spawn real tmux. Real-tmux benches live in Track A only.
+
 ## Behavioral evaluator harness: mandatory for user-observable changes
 
 The evaluator harness at `tests/eval/` catches the class of bugs where a Go
