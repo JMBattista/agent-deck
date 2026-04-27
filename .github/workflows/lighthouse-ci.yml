@@ -37,7 +37,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
   issues: write
 
 concurrency:
@@ -73,12 +73,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ! gh label list --repo "$GITHUB_REPOSITORY" --limit 200 --json name | jq -e --arg n "$ACK_LABEL" '.[] | select(.name == $n)' > /dev/null; then
-            gh label create "$ACK_LABEL" \
-              --repo "$GITHUB_REPOSITORY" \
-              --color "fbca04" \
-              --description "Maintainer ack: lighthouse-ci delta gate regression is intentional. Removing the label re-fails the check."
+          # Idempotent: try to create; treat "already exists" as success.
+          # Any other failure (auth, perms, network) prints the raw output
+          # and fails the step so it surfaces clearly in the run log.
+          set +e
+          output=$(gh label create "$ACK_LABEL" \
+            --repo "$GITHUB_REPOSITORY" \
+            --color "fbca04" \
+            --description "Maintainer ack: lighthouse-ci delta gate regression is intentional. Removing the label re-fails the check." 2>&1)
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "Label '$ACK_LABEL' created."
+            exit 0
           fi
+          if echo "$output" | grep -qiE "already exists|already_exists"; then
+            echo "Label '$ACK_LABEL' already exists; nothing to do."
+            exit 0
+          fi
+          echo "::error title=Failed to ensure ack label::gh label create exited $rc"
+          echo "$output"
+          exit 1
 
       - name: Set up Go
         uses: actions/setup-go@v5

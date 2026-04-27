@@ -5,11 +5,11 @@
 //   node tests/lighthouse/compare-deltas.mjs <baseDir> <headDir>
 //
 // Where each dir holds the .lighthouseci/ output from a single `lhci collect`
-// run (i.e. one or more lhr-*.json files). The script reads
+// run (i.e. one or more lhr-*.json files). The script reads, from each report:
 //   - audits['total-byte-weight'].numericValue
-//   - audits['resource-summary'].details.items (scriptType.transferSize)
-// from every report, takes the median per metric per dir, and fails if the
-// head-vs-base delta exceeds the threshold env vars below.
+//   - audits['resource-summary'].details.items.find(i => i.resourceType === 'script').transferSize
+// takes the median per metric per dir, and fails if the head-vs-base delta
+// exceeds the threshold env vars below.
 //
 // Env (all percentages, default 5):
 //   MAX_BYTE_WEIGHT_DELTA_PCT  — gates total-byte-weight
@@ -44,7 +44,22 @@ function loadReports(dir, { allowEmpty = false } = {}) {
     console.error(`no lhr-*.json files found in ${dir}`);
     process.exit(2);
   }
-  return files.map(f => JSON.parse(readFileSync(join(dir, f), 'utf8')));
+  return files.map(f => {
+    const path = join(dir, f);
+    let raw;
+    try {
+      raw = readFileSync(path, 'utf8');
+    } catch (e) {
+      console.error(`failed to read ${path}: ${e.message}`);
+      process.exit(2);
+    }
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      console.error(`failed to parse ${path} as JSON: ${e.message}`);
+      process.exit(2);
+    }
+  });
 }
 
 function median(values) {

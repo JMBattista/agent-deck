@@ -32,7 +32,8 @@ func buildWebServer(profile string, args []string, menuData web.MenuDataLoader, 
 	fs.Usage = func() {
 		fmt.Println("Usage: agent-deck web [options]")
 		fmt.Println()
-		fmt.Println("Start the TUI with web UI server running alongside.")
+		fmt.Println("Start the web UI server. By default the TUI runs alongside; pass")
+		fmt.Println("--no-tui to skip the bubbletea TUI (e.g. for headless CI runs).")
 		fmt.Println()
 		fmt.Println("Options:")
 		fs.PrintDefaults()

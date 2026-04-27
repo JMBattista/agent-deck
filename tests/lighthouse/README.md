@@ -136,8 +136,13 @@ is unavailable).
    median per metric, and fails if `total-byte-weight` or `script:size` grew
    by more than `MAX_*_DELTA_PCT` (default 5%). Skipped with a warning when no
    base data is present.
-8. Results uploaded to `temporary-public-storage` (public link in check output)
-9. HTML report artifacts attached to the workflow run
+7. If the delta gate failed, the override step checks for the
+   `lighthouse-regression-acknowledged` label and exits 0 (with a `::notice::`)
+   if present, else exits 1 (with an `::error::` explaining how to opt in).
+8. Both result dirs (`pr/` and `base/`) are uploaded as the
+   `lighthouse-results-<run_id>` GitHub Actions artifact (14-day retention)
+   for post-mortem inspection. Lighthouse HTML reports for every individual
+   run are inside that artifact.
 
 ## Local Verification
 
