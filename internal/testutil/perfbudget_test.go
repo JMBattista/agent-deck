@@ -112,23 +112,35 @@ func TestTrimmedMean_DropsExtremes(t *testing.T) {
 
 func TestTrimmedMeanWithSetup_ExcludesSetup(t *testing.T) {
 	setupCalls, opCalls := 0, 0
+	// Use a deliberately huge setup-vs-op ratio (100ms vs 2ms = 50×) so
+	// that any contamination from setup leaking into the timed window
+	// would be obvious. Allow the trimmed mean up to setupSleep/2 — well
+	// under the setup duration but loose enough to absorb scheduler
+	// jitter on a busy CI runner under -race.
+	const (
+		setupSleep = 100 * time.Millisecond
+		opSleep    = 2 * time.Millisecond
+		// Looser bound than absolute "small": if the helper accidentally
+		// included setup time, even a single contaminated sample would
+		// push the trimmed mean of the middle 7 well above 50 ms.
+		maxAcceptable = setupSleep / 2
+	)
 	got := TrimmedMeanWithSetup(
 		func() {
 			setupCalls++
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(setupSleep)
 		},
 		func() {
 			opCalls++
-			time.Sleep(2 * time.Millisecond)
+			time.Sleep(opSleep)
 		},
 	)
 	wantCalls := trimmedMeanN + 1
 	if setupCalls != wantCalls || opCalls != wantCalls {
 		t.Fatalf("setup=%d op=%d, want both=%d", setupCalls, opCalls, wantCalls)
 	}
-	// 20 ms setup must NOT be in the trimmed mean. Op sleeps 2 ms.
-	if got > 15*time.Millisecond {
-		t.Fatalf("TrimmedMeanWithSetup absorbed setup time: got %v, want <15ms", got)
+	if got > maxAcceptable {
+		t.Fatalf("TrimmedMeanWithSetup absorbed setup time: got %v, want < %v (setup=%v)", got, maxAcceptable, setupSleep)
 	}
 }
 

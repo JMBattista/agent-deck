@@ -45,9 +45,12 @@ jobs:
       - name: Run TestPerf_ suite
         env:
           PERF_BUDGET_MULTIPLIER: '2.0'
+        # ./... so any TestPerf_* added in any package is exercised — the
+        # path filter triggers on **/*_perf_test.go and the mandate covers
+        # the whole module, so the test invocation must match.
         run: |
           go test -run '^TestPerf_' -race -v -count=1 -timeout 120s \
-            ./cmd/agent-deck/... \
+            ./... \
             | tee perf-medians.txt
 
       - name: Upload perf median log
