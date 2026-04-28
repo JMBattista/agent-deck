@@ -17,18 +17,20 @@ import (
 //
 // Both tests build the binary once via the eval harness's buildOnce machinery
 // and exec it with `--help` / `--version`. The timed window covers everything
-// from process spawn through the init() block (main.go:50-89), the tmux
-// SetDefaultSocketName / WarnIfVulnerableTmux calls (main.go:218,223), and
-// the subcommand-routing path that prints help/version and exits.
+// from process spawn through the package init() block (initColorProfile,
+// initUpdateSettings), the pre-dispatch tmux probes
+// (tmux.SetDefaultSocketName, tmux.WarnIfVulnerableTmux), and the
+// subcommand-routing path that prints help/version and exits.
 //
 // These are COLD tests: they cross a process boundary, so the budget
 // formula is base × 5 (with PERF_BUDGET_MULTIPLIER scaling and a 1ms floor)
 // and the measurement is an n=11 trimmed mean. See internal/testutil/perfbudget.go
 // for the full convention.
 //
-// On Linux (CI), WarnIfVulnerableTmux is a no-op and the binary spawns no
-// child processes for --help/--version. Tests are safe under -race and
-// require no real tmux server.
+// Track B mandate (CLAUDE.md): TestPerf_* must not invoke real tmux.
+// AGENTDECK_SUPPRESS_TMUX_WARNING=1 keeps WarnIfVulnerableTmux from shelling
+// out to `tmux -V` on macOS dev hosts (no-op on Linux but set unconditionally
+// for parity).
 
 // Base local medians observed under -race at PERF_BUDGET_MULTIPLIER=1.0
 // (Linux container, Intel Xeon @ 2.10GHz). ColdBudget multiplies by 5
@@ -39,20 +41,20 @@ const (
 )
 
 // TestPerf_ColdStart_Help measures `agent-deck --help` end-to-end walltime.
-// Catches regressions in init() at cmd/agent-deck/main.go:50-89 and the
-// pre-dispatch tmux probes at :218,:223.
+// Catches regressions in package init (initColorProfile, initUpdateSettings)
+// and the pre-dispatch tmux probes (SetDefaultSocketName, WarnIfVulnerableTmux).
 func TestPerf_ColdStart_Help(t *testing.T) {
 	testutil.SkipIfShort(t)
 	budget := testutil.ColdBudget(t, coldStartHelpBase)
 	sb := harness.NewSandbox(t)
-	env := sb.Env()
+	env := perfEnv(sb)
 
 	got := testutil.TrimmedMean(func() {
 		runColdStart(t, sb.BinPath, env, "--help")
 	})
 
 	if got > budget {
-		t.Fatalf("agent-deck --help cold start trimmed mean = %v, budget = %v (regression in cmd/agent-deck/main.go init or tmux probes)", got, budget)
+		t.Fatalf("agent-deck --help cold start trimmed mean = %v, budget = %v (regression in package init or pre-dispatch tmux probes)", got, budget)
 	}
 	t.Logf("agent-deck --help trimmed mean = %v (budget = %v)", got, budget)
 }
@@ -64,7 +66,7 @@ func TestPerf_ColdStart_Version(t *testing.T) {
 	testutil.SkipIfShort(t)
 	budget := testutil.ColdBudget(t, coldStartVersionBase)
 	sb := harness.NewSandbox(t)
-	env := sb.Env()
+	env := perfEnv(sb)
 
 	got := testutil.TrimmedMean(func() {
 		runColdStart(t, sb.BinPath, env, "--version")
@@ -74,6 +76,15 @@ func TestPerf_ColdStart_Version(t *testing.T) {
 		t.Fatalf("agent-deck --version cold start trimmed mean = %v, budget = %v", got, budget)
 	}
 	t.Logf("agent-deck --version trimmed mean = %v (budget = %v)", got, budget)
+}
+
+// perfEnv returns the harness sandbox env with AGENTDECK_SUPPRESS_TMUX_WARNING=1
+// appended. Track B mandate (CLAUDE.md) requires TestPerf_* not invoke real
+// tmux; on macOS the binary's WarnIfVulnerableTmux otherwise shells out to
+// `tmux -V`. Suppressing it is a no-op on Linux (early return) but keeps the
+// macOS dev experience identical to CI.
+func perfEnv(sb *harness.Sandbox) []string {
+	return append(sb.Env(), "AGENTDECK_SUPPRESS_TMUX_WARNING=1")
 }
 
 func runColdStart(t *testing.T, bin string, env []string, arg string) {

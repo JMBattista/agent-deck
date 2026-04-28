@@ -92,7 +92,7 @@ GOTOOLCHAIN=go1.24.0 PERF_BUDGET_MULTIPLIER=2.0 \
   ./cmd/agent-deck/...
 ```
 
-CI runs this as `.github/workflows/perf-smoke.yml`. Either red blocks the PR.
+CI runs this as `.github/workflows/perf-smoke.yml`. Only the `perf-tests` job is a hard gate; `perf-bench-trend` is advisory (`continue-on-error: true`) and may show red without blocking merge.
 
 ### Paths under the mandate
 
@@ -142,7 +142,7 @@ When adding a TUI-flow or persistence-touching test, write the Tier 1 walltime g
 
 ### Track A vs Track B
 
-`Benchmark*` functions are advisory (no `-race`, run via `make bench`). `TestPerf_*` are hard-gated walltime regressions that never spawn real tmux. Real-tmux benches live in Track A only.
+`Benchmark*` functions are advisory (no `-race`, run via `make bench`). `TestPerf_*` are hard-gated walltime regressions and must remain tmux-free in Track B — including suppressing the macOS `tmux -V` warning probe via `AGENTDECK_SUPPRESS_TMUX_WARNING=1` in any TestPerf_* that exercises `cmd/agent-deck/main.go`. Real-tmux benches live in Track A only.
 
 ## Behavioral evaluator harness: mandatory for user-observable changes
 
