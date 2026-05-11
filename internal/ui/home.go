@@ -889,6 +889,26 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 
 	tmux.SetPipeManager(pm)
 
+	// Teach killStaleControlClients to recognize control clients owned by
+	// live sibling TUI instances (#927). Without this, two agent-deck TUIs
+	// against the same profile SIGTERM each other's `tmux -C` clients on
+	// every reconnect, flipping every session into StatusError within ~20s.
+	tmux.SetLiveInstanceLookup(func() map[int]bool {
+		db := statedb.GetGlobal()
+		if db == nil {
+			return nil
+		}
+		pids, err := db.LiveInstancePIDs(30 * time.Second)
+		if err != nil || len(pids) == 0 {
+			return nil
+		}
+		set := make(map[int]bool, len(pids))
+		for _, p := range pids {
+			set[p] = true
+		}
+		return set
+	})
+
 	// Connect pipes for all existing running sessions in background
 	safego.Go(pipeUILog, "startup_pipe_connect", func() {
 		time.Sleep(500 * time.Millisecond) // Let TUI render first

@@ -848,6 +848,31 @@ func (s *StateDB) AliveInstanceCount() (int, error) {
 	return count, err
 }
 
+// LiveInstancePIDs returns the PIDs of TUI instances whose heartbeat is
+// fresher than `fresh` ago. Powers the #927 fix in tmux.killStaleControlClients:
+// a control client whose parent PID matches one of these is owned by a
+// live sibling TUI and must NOT be SIGTERMed on reconnect.
+func (s *StateDB) LiveInstancePIDs(fresh time.Duration) ([]int, error) {
+	cutoff := time.Now().Add(-fresh).Unix()
+	rows, err := s.db.Query(
+		"SELECT pid FROM instance_heartbeats WHERE heartbeat >= ?", cutoff,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("statedb: query live instance pids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var pids []int
+	for rows.Next() {
+		var pid int
+		if err := rows.Scan(&pid); err != nil {
+			return nil, fmt.Errorf("statedb: scan live instance pid: %w", err)
+		}
+		pids = append(pids, pid)
+	}
+	return pids, rows.Err()
+}
+
 // --- Primary Election ---
 
 // ElectPrimary attempts to make this instance the primary.
