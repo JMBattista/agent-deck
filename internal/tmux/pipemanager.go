@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
@@ -440,6 +441,13 @@ func (pm *PipeManager) watchPipe(sessionName string, pipe *ControlPipe) {
 //
 // Expected to find stale clients after: agent-deck crash/SIGKILL, OOM kill,
 // or any exit that bypasses PipeManager.Close() (which normally tears them down).
+//
+// When two agent-deck TUIs run against the same profile (`[instances]
+// allow_multiple = true`, default), the per-process pid filter alone is
+// insufficient — A would still SIGTERM B's live clients on every reconnect.
+// shouldSkipControlClientKill consults the instance_heartbeats table (via
+// the lookup wired in by SetLiveInstanceLookup) so a control client whose
+// PPID matches a live sibling TUI is preserved instead of reaped (#927).
 func killStaleControlClients(sessionName, socketName string) {
 	myPID := os.Getpid()
 
@@ -466,6 +474,12 @@ func killStaleControlClients(sessionName, socketName string) {
 		if pid == myPID {
 			continue // don't kill our own process
 		}
+		if shouldSkipControlClientKill(pid, getLiveInstanceLookup(), resolveParentPID) {
+			pipeLog.Debug("skipped_sibling_control_client",
+				slog.String("session", sessionName),
+				slog.Int("pid", pid))
+			continue
+		}
 		// Soft-kill the stale control-mode client process.
 		// On macOS Homebrew tmux 3.6a there is an unfixed NULL-deref in the
 		// control-mode notify path that races with client teardown (#737).
@@ -479,6 +493,88 @@ func killStaleControlClients(sessionName, socketName string) {
 			slog.Int("pid", pid),
 			slog.Bool("used_sigkill", usedSIGKILL))
 	}
+}
+
+// shouldSkipControlClientKill returns true when the given control client
+// pid is owned by another live agent-deck TUI instance (its PPID matches
+// a fresh row in instance_heartbeats). This is the testable core of the
+// #927 fix; killStaleControlClients passes the real lookup + /proc-based
+// resolver, tests pass stubs.
+//
+// Fail-closed semantics: when the lookup is nil, returns an empty set,
+// or the PPID cannot be resolved, returns false (i.e. proceed with the
+// kill). This preserves the pre-#927 orphan-reap guarantee from #595/#737
+// in cases where we can't prove a live sibling owns the client.
+func shouldSkipControlClientKill(
+	pid int,
+	liveLookup func() map[int]bool,
+	ppidResolve func(int) (int, error),
+) bool {
+	if liveLookup == nil {
+		return false
+	}
+	live := liveLookup()
+	if len(live) == 0 {
+		return false
+	}
+	ppid, err := ppidResolve(pid)
+	if err != nil || ppid == 0 {
+		return false
+	}
+	return live[ppid]
+}
+
+// resolveParentPID returns the parent PID of the given process. Linux
+// reads /proc/<pid>/status (PPid: line); macOS and other Unixes fall
+// back to `ps -o ppid= -p <pid>`. Returns an error if neither path
+// yields a parseable PPID — callers must treat error as "unknown" and
+// fall back to the pre-#927 always-kill behaviour rather than
+// pessimistically preserving an unidentifiable client.
+func resolveParentPID(pid int) (int, error) {
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid)); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if rest, ok := strings.CutPrefix(line, "PPid:"); ok {
+				var ppid int
+				if _, err := fmt.Sscanf(strings.TrimSpace(rest), "%d", &ppid); err == nil {
+					return ppid, nil
+				}
+			}
+		}
+	}
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", fmt.Sprintf("%d", pid)).Output()
+	if err != nil {
+		return 0, fmt.Errorf("resolveParentPID(%d): %w", pid, err)
+	}
+	var ppid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &ppid); err != nil {
+		return 0, fmt.Errorf("resolveParentPID(%d): parse ps output %q: %w", pid, string(out), err)
+	}
+	return ppid, nil
+}
+
+// liveInstanceLookup is the hook by which killStaleControlClients
+// learns which PIDs are live agent-deck TUI instances. Wiring lives in
+// home.go / main.go (where statedb is already imported) so the tmux
+// package itself stays free of an instance_heartbeats dependency.
+var (
+	liveInstanceLookup   func() map[int]bool
+	liveInstanceLookupMu sync.RWMutex
+)
+
+// SetLiveInstanceLookup installs (or, when fn==nil, clears) the
+// callback that returns the set of PIDs whose instance_heartbeats row
+// is fresh. Safe to call concurrently. Pass nil from tests to
+// detach the hook on cleanup.
+func SetLiveInstanceLookup(fn func() map[int]bool) {
+	liveInstanceLookupMu.Lock()
+	liveInstanceLookup = fn
+	liveInstanceLookupMu.Unlock()
+}
+
+func getLiveInstanceLookup() func() map[int]bool {
+	liveInstanceLookupMu.RLock()
+	defer liveInstanceLookupMu.RUnlock()
+	return liveInstanceLookup
 }
 
 // controlClientKillGrace is how long softKillProcess waits after SIGTERM
