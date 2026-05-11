@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,19 @@ import (
 // dueling kills continue (false negative) or skip orphan reaps
 // (false positive).
 func TestResolveParentPID_MatchesOSGetppid(t *testing.T) {
+	// resolveParentPID is unix-only — it reads /proc/<pid>/status or
+	// falls back to `ps`. The whole tmux package already fails to
+	// build on windows (syscall.Kill et al.), but skip explicitly so
+	// the intent is documented rather than relying on a build-tag
+	// side effect.
+	if runtime.GOOS == "windows" {
+		t.Skip("resolveParentPID requires /proc or ps; neither is available on windows")
+	}
+	if _, procErr := os.Stat("/proc/self/status"); procErr != nil {
+		if _, psErr := exec.LookPath("ps"); psErr != nil {
+			t.Skip("neither /proc nor ps available (stripped container?)")
+		}
+	}
 	ppid, err := resolveParentPID(os.Getpid())
 	require.NoError(t, err)
 	assert.Equal(t, os.Getppid(), ppid)
@@ -141,14 +155,18 @@ func TestKillStaleControlClients_PreservesSiblingTUIControlClient(t *testing.T) 
 
 	killStaleControlClients(name, "")
 
-	// Give the would-be SIGTERM time to land (or, with the fix, not).
-	// 300ms is well past softKillProcess's 500ms grace would have begun.
-	time.Sleep(300 * time.Millisecond)
-
-	out, _ := exec.Command("tmux", "list-clients", "-t", name,
-		"-F", "#{client_control_mode} #{client_pid}").Output()
-	assert.Contains(t, string(out), fmt.Sprintf("1 %d", siblingPID),
-		"sibling-owned control client must NOT be killed (#927 regression)")
+	// Watch across the full softKillProcess grace window: if the
+	// fix is broken, SIGTERM lands at t=0 and SIGKILL by
+	// t=controlClientKillGrace (500ms). 200ms cushion covers tmux's
+	// client-removal notify plus scheduler jitter on race-instrumented
+	// builds. assert.Never expresses "must not disappear" directly.
+	assert.Never(t, func() bool {
+		out, _ := exec.Command("tmux", "list-clients", "-t", name,
+			"-F", "#{client_control_mode} #{client_pid}").Output()
+		return !strings.Contains(string(out), fmt.Sprintf("1 %d", siblingPID))
+	}, controlClientKillGrace+200*time.Millisecond, 50*time.Millisecond,
+		"sibling-owned control client must NOT be killed within softKill "+
+			"grace window (#927 regression)")
 }
 
 // TestKillStaleControlClients_StillReapsOrphanWithHookInstalled asserts
