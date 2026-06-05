@@ -426,6 +426,12 @@ type Home struct {
 	previewPct          int       // 10-90, default 65
 	previewPctOverlayAt time.Time // when to hide the split overlay (zero = hidden)
 
+	// footerMode selects the bottom hint-bar style (config.toml [ui] footer).
+	// One of session.FooterCurated (default), FooterFull, FooterCompact, or
+	// FooterMinimal. Cached so every render of a frame agrees. Additive/opt-in:
+	// it only changes WHAT the footer advertises, never a keybinding.
+	footerMode string
+
 	// Performance observability (debug mode only, zero cost when off)
 	debugMode          bool         // true when AGENTDECK_DEBUG=1, enables perf overlay
 	lastRenderDuration atomic.Int64 // microseconds, for debug status bar
@@ -992,6 +998,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		h.previewPct = cfg.UI.GetPreviewPct()
 		h.remoteLatencyRefreshSec = cfg.UI.GetRemoteLatencyRefreshSecs(cfg.SystemStats.GetRefreshSeconds())
 		h.remoteSessionRefreshSec = cfg.UI.GetRemoteSessionRefreshSecs()
+		h.footerMode = cfg.UI.GetFooter()
 	} else {
 		h.fullRepaint = (session.DisplaySettings{}).GetFullRepaint()
 		h.activeFilterExcludes = (session.DisplaySettings{}).GetActiveFilterExcludes()
@@ -999,6 +1006,7 @@ func NewHomeWithProfileAndMode(profile string) *Home {
 		h.previewPct = session.DefaultPreviewPct
 		h.remoteLatencyRefreshSec = (session.UISettings{}).GetRemoteLatencyRefreshSecs(0)
 		h.remoteSessionRefreshSec = (session.UISettings{}).GetRemoteSessionRefreshSecs()
+		h.footerMode = (session.UISettings{}).GetFooter()
 	}
 	h.remoteLatency = make(map[string]session.RemoteLatency)
 
@@ -6756,7 +6764,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "f":
 		// Quick fork session (same title with " (fork)" suffix)
-		// Only available when session has a valid Claude session ID
+		// Only available when the selected tool supports Agent Deck forking
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
@@ -6774,7 +6782,7 @@ func (h *Home) handleMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "F", "shift+f":
 		// Fork with dialog (customize title and group)
-		// Only available when session has a valid Claude session ID
+		// Only available when the selected tool supports Agent Deck forking
 		if h.cursor < len(h.flatItems) {
 			item := h.flatItems[h.cursor]
 			if item.Type == session.ItemTypeSession && item.Session != nil {
@@ -9399,7 +9407,7 @@ func (h *Home) forkSessionCmd(source *session.Instance, title, groupPath, parent
 	return h.forkSessionCmdWithOptions(source, title, groupPath, nil, false, parentSessionID, parentProjectPath)
 }
 
-// forkSessionCmdWithOptions creates a forked session with the given title, group, Claude options, and optional sandbox.
+// forkSessionCmdWithOptions creates a forked session with the given title, group, shared fork options, and optional sandbox.
 // Shows immediate UI feedback by tracking the source session in forkingSessions.
 func (h *Home) forkSessionCmdWithOptions(
 	source *session.Instance,
@@ -9453,6 +9461,8 @@ func (h *Home) forkSessionCmdWithOptions(
 		switch source.Tool {
 		case "opencode":
 			inst, _, err = source.CreateForkedOpenCodeInstance(title, groupPath)
+		case "pi":
+			inst, _, err = source.CreateForkedPiInstanceWithOptions(title, groupPath, opts)
 		default:
 			inst, _, err = source.CreateForkedInstanceWithOptions(title, groupPath, opts)
 		}
@@ -9832,6 +9842,27 @@ func (h *Home) attachSession(inst *session.Instance) tea.Cmd {
 	// Do not synchronously save here; saving on attach blocks transition and causes
 	// visible blank-screen delay before tmux attach starts.
 	inst.MarkAccessed()
+
+	// #1114 follow-up: Claude's /rename fires no agent-deck hook, so an idle
+	// session's title and iTerm2 badge can be stale at attach time (the
+	// hook-driven sync only runs on the next turn boundary). Reconcile from the
+	// agent's current Claude session name here — before tmuxSess.Attach() emits
+	// the badge from DisplayName — so detach/reattach reliably refreshes it.
+	if session.IsClaudeCompatible(inst.Tool) {
+		sessionID := session.ReadHookSessionAnchor(inst.ID)
+		if sessionID == "" {
+			sessionID = inst.ClaudeSessionID
+		}
+		if newName, changed := inst.ReconcileTitleFromClaude(sessionID); changed {
+			h.pendingTitleChanges[inst.ID] = newName
+			h.invalidatePreviewCache(inst.ID)
+			h.rebuildFlatItems()
+			h.saveInstances()
+			uiLog.Info("title_reconciled_on_attach",
+				slog.String("session_id", inst.ID),
+				slog.String("title", newName))
+		}
+	}
 
 	// Acknowledge on ATTACH (not detach) - but ONLY if session is waiting (yellow)
 	// This ensures:
@@ -11438,12 +11469,39 @@ func renderSimpleMCPLine(b *strings.Builder, mcpInfo *session.MCPInfo, width int
 	b.WriteString("\n")
 }
 
-// renderHelpBar renders context-aware keyboard shortcuts, adapting to terminal width
+// renderHelpBar renders context-aware keyboard shortcuts. The style is
+// selected by config.toml [ui] footer (cached in h.footerMode):
+//
+//   - "curated" (default): a lighter, dim inline bar that advertises only the
+//     actions relevant to the selected row, with the settings and help keys
+//     always last. Rarer/global actions live under help (?).
+//   - "full": the historic verbose bar with filled key chips, adapting to
+//     terminal width across the tiny/minimal/compact/full tiers.
+//   - "compact" / "minimal": force a single verbose tier regardless of width.
+//
+// The very-narrow tiny tier is always used below layoutBreakpointSingle so the
+// bar never overflows, whatever the configured style.
 func (h *Home) renderHelpBar() string {
-	// Route to appropriate tier based on width
-	switch {
-	case h.width < layoutBreakpointSingle:
+	if h.width < layoutBreakpointSingle {
 		return h.renderHelpBarTiny()
+	}
+
+	switch h.footerMode {
+	case session.FooterFull:
+		return h.renderHelpBarWidthAdaptive()
+	case session.FooterCompact:
+		return h.renderHelpBarCompact()
+	case session.FooterMinimal:
+		return h.renderHelpBarMinimal()
+	default:
+		return h.renderHelpBarCurated()
+	}
+}
+
+// renderHelpBarWidthAdaptive routes to the historic width-based tiers used by
+// the "full" footer style.
+func (h *Home) renderHelpBarWidthAdaptive() string {
+	switch {
 	case h.width < 70:
 		return h.renderHelpBarMinimal()
 	case h.width < 100:
@@ -11817,7 +11875,7 @@ func (h *Home) renderHelpBarFull() string {
 			if item.Session != nil && item.Session.CanRestartFresh() && restartFreshKey != "" {
 				primaryHints = append(primaryHints, h.helpKey(restartFreshKey, "Restart Fresh"))
 			}
-			// Only show fork hints if session has a valid Claude session ID
+			// Only show fork hints when the selected tool supports Agent Deck forking.
 			if item.Session != nil && item.Session.CanFork() {
 				if forkKeys != "" {
 					primaryHints = append(primaryHints, h.helpKey(forkKeys, "Fork"))
@@ -11968,6 +12026,156 @@ func (h *Home) helpKey(key, desc string) string {
 		Padding(0, 1)
 	descStyle := lipgloss.NewStyle().Foreground(ColorText)
 	return keyStyle.Render(key) + " " + descStyle.Render(desc)
+}
+
+// footerHint is one rendered key/label pair for the curated footer.
+type footerHint struct {
+	key   string
+	label string
+}
+
+// curatedHint formats a single footer hint as dim, plain inline text — the key
+// in a slightly emphasized dim, the label in the same dim tone. No filled chip:
+// the curated bar should recede rather than compete for attention.
+func (h *Home) curatedHint(hint footerHint) string {
+	keyStyle := lipgloss.NewStyle().Foreground(ColorComment).Bold(true)
+	labelStyle := lipgloss.NewStyle().Foreground(ColorComment)
+	return keyStyle.Render(hint.key) + " " + labelStyle.Render(hint.label)
+}
+
+// maxCuratedContextHints caps how many context-relevant shortcuts the curated
+// footer advertises for the selected row. The settings and help keys are added
+// on top of these by renderHelpBarCurated, so the bar stays short while still
+// surfacing the two or three most useful actions for what is highlighted.
+const maxCuratedContextHints = 3
+
+// curatedContextHints returns up to maxCuratedContextHints context-relevant
+// hints for the selected row, in priority order. It advertises the actions most
+// likely to be wanted for the current selection; rarer and global actions stay
+// under help (?). The settings and help keys are added separately by
+// renderHelpBarCurated so they always remain last.
+func (h *Home) curatedContextHints(item session.Item) []footerHint {
+	var hints []footerHint
+	add := func(key, label string) {
+		if len(hints) >= maxCuratedContextHints {
+			return
+		}
+		if strings.TrimSpace(key) != "" {
+			hints = append(hints, footerHint{key: key, label: label})
+		}
+	}
+
+	newQuick := joinHotkeyLabels(h.actionKey(hotkeyNewSession), h.actionKey(hotkeyQuickCreate))
+
+	switch item.Type {
+	case session.ItemTypeGroup:
+		// Group row: collapse/expand first (Tab; also l/h), then create/manage.
+		if item.Group != nil && item.Group.Expanded {
+			add("Tab", "collapse")
+		} else {
+			add("Tab", "expand")
+		}
+		add(newQuick, "new")
+		add(h.actionKey(hotkeyRename), "rename")
+
+	case session.ItemTypeSession:
+		s := item.Session
+		if s == nil {
+			return hints
+		}
+		if sessionIsDead(s) {
+			// Dead (stopped or error): restart, then restart-fresh when the
+			// tool tracks a session id, then delete — the actions for a session
+			// that broke or was parked, in order of likely intent.
+			add(h.actionKey(hotkeyRestart), "restart")
+			if s.CanRestartFresh() {
+				add(h.actionKey(hotkeyRestartFresh), "restart fresh")
+			}
+			add(h.actionKey(hotkeyDelete), "delete")
+		} else {
+			// Live/attachable session: attach first, then restart, then the
+			// most relevant follow-up (fork while forkable, else new).
+			add("⏎", "attach")
+			add(h.actionKey(hotkeyRestart), "restart")
+			if s.CanFork() {
+				add(h.actionKey(hotkeyQuickFork), "fork")
+			} else {
+				add(newQuick, "new")
+			}
+		}
+
+	case session.ItemTypeWindow:
+		// A tmux window row attaches just like its session.
+		add("⏎", "attach")
+
+	case session.ItemTypeRemoteSession:
+		// A remote session row attaches over SSH just like a local session;
+		// without this case the curated footer dropped the attach hint for
+		// remote rows (PR #1289 review nit 1).
+		add("⏎", "attach")
+	}
+
+	return hints
+}
+
+// sessionIsDead reports whether a session is stopped or errored — the states
+// for which restart, rather than attach, is the relevant footer action. Reads
+// the status via the thread-safe getter since the render goroutine runs
+// concurrently with backgroundStatusUpdate (PR #1289 review nit 2).
+func sessionIsDead(s *session.Instance) bool {
+	status := s.GetStatusThreadSafe()
+	return status == session.StatusStopped || status == session.StatusError
+}
+
+// renderHelpBarCurated renders the lighter, context-aware footer (the default
+// "curated" style). It shows dim, plain inline hints for only the actions
+// relevant to the selected row, and always keeps the settings key then the help
+// key as the last two items. It advertises nothing that the verbose bar bound —
+// every action remains reachable by its key and is fully listed under help (?).
+func (h *Home) renderHelpBarCurated() string {
+	borderStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	border := borderStyle.Render(strings.Repeat("─", max(0, h.width)))
+
+	var hints []footerHint
+
+	switch {
+	case h.jumpMode:
+		hints = append(hints, footerHint{key: "a-z", label: "jump"}, footerHint{key: "esc", label: "cancel"})
+	case len(h.flatItems) == 0:
+		// Empty list: the useful actions all create something — new session,
+		// import, or a group. Cap at the same budget as context hints.
+		add := func(key, label string) {
+			if len(hints) >= maxCuratedContextHints {
+				return
+			}
+			if strings.TrimSpace(key) != "" {
+				hints = append(hints, footerHint{key: key, label: label})
+			}
+		}
+		add(joinHotkeyLabels(h.actionKey(hotkeyNewSession), h.actionKey(hotkeyQuickCreate)), "new")
+		add(h.actionKey(hotkeyImport), "import")
+		add(h.actionKey(hotkeyCreateGroup), "group")
+	case h.cursor < len(h.flatItems):
+		hints = append(hints, h.curatedContextHints(h.flatItems[h.cursor])...)
+	}
+
+	// Always keep settings then help as the LAST two items, in that order.
+	if key := h.actionKey(hotkeySettings); key != "" {
+		hints = append(hints, footerHint{key: key, label: "settings"})
+	}
+	if key := h.actionKey(hotkeyHelp); key != "" {
+		hints = append(hints, footerHint{key: key, label: "help"})
+	}
+
+	parts := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		parts = append(parts, h.curatedHint(hint))
+	}
+	sepStyle := lipgloss.NewStyle().Foreground(ColorBorder)
+	content := strings.Join(parts, sepStyle.Render("  "))
+
+	raw := lipgloss.JoinVertical(lipgloss.Left, border, content)
+	return lipgloss.NewStyle().MaxWidth(h.width).Render(raw)
 }
 
 // renderDebugBar renders a compact performance overlay for debug mode.
