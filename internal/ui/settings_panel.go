@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,14 +51,105 @@ const (
 // Total number of navigable settings.
 const settingsCount = 31
 
+// settingsSection groups related settings for the left (master) pane. Each
+// section's settings are shown in the right (detail) pane when the section is
+// selected. This is a pure reorganization of the existing settingsCount
+// settings — no config keys or on-disk schema change.
+type settingsSection struct {
+	title    string
+	settings []SettingType
+	info     bool // informational only (no editable settings, e.g. MCP & Tools)
+}
+
+// settingsSections is the master list rendered in the left pane. Together the
+// editable sections must cover exactly the settingsCount SettingType entries,
+// each appearing in exactly one section (verified by TestSettingsSectionsCoverAllSettings).
+var settingsSections = []settingsSection{
+	{title: "Appearance", settings: []SettingType{
+		SettingTheme,
+		SettingShowOutput,
+		SettingShowAnalytics,
+		SettingShowNotes,
+		SettingNotesOutputSplit,
+	}},
+	{title: "Agents — Shared", settings: []SettingType{
+		SettingDefaultTool,
+		SettingDangerousMode,
+	}},
+	{title: "Agents — Claude", settings: []SettingType{
+		SettingClaudeConfigDir,
+	}},
+	{title: "Agents — Gemini", settings: []SettingType{
+		SettingGeminiYoloMode,
+	}},
+	{title: "Agents — Codex", settings: []SettingType{
+		SettingCodexYoloMode,
+	}},
+	{title: "Agents — Hermes", settings: []SettingType{
+		SettingHermesYoloMode,
+	}},
+	{title: "Updates", settings: []SettingType{
+		SettingCheckForUpdates,
+		SettingAutoUpdate,
+	}},
+	{title: "Logs", settings: []SettingType{
+		SettingLogMaxSize,
+		SettingLogMaxLines,
+	}},
+	{title: "Search", settings: []SettingType{
+		SettingGlobalSearchEnabled,
+		SettingSearchTier,
+		SettingRecentDays,
+	}},
+	{title: "Maintenance", settings: []SettingType{
+		SettingRemoveOrphans,
+		SettingMaintenanceEnabled,
+	}},
+	{title: "System Stats", settings: []SettingType{
+		SettingStatsEnabled,
+		SettingStatsRefresh,
+		SettingStatsFormat,
+		SettingStatsShowCPU,
+		SettingStatsShowRAM,
+		SettingStatsShowDisk,
+		SettingStatsShowNetwork,
+		SettingStatsShowGPU,
+		SettingStatsShowLoad,
+	}},
+	{title: "Sessions", settings: []SettingType{
+		SettingSyncTitle,
+	}},
+	{title: "Display", settings: []SettingType{
+		SettingShowSessionTimestamps,
+	}},
+	{title: "MCP & Tools", info: true},
+}
+
+// adjustableSettings are the radio/number settings that left/right (h/l) tune
+// in-place in the detail pane. Toggles and text fields are not in this set, so
+// left/right over them moves focus back to the section list instead.
+var adjustableSettings = map[SettingType]bool{
+	SettingTheme:            true,
+	SettingDefaultTool:      true,
+	SettingSearchTier:       true,
+	SettingLogMaxSize:       true,
+	SettingLogMaxLines:      true,
+	SettingRecentDays:       true,
+	SettingNotesOutputSplit: true,
+	SettingStatsRefresh:     true,
+	SettingStatsFormat:      true,
+}
+
 // SettingsPanel displays and edits user configuration
 type SettingsPanel struct {
-	visible      bool
-	width        int
-	height       int
-	cursor       int // Current setting index
-	scrollOffset int // Scroll offset when content overflows terminal height
-	profile      string
+	visible       bool
+	width         int
+	height        int
+	cursor        int  // Current setting index within the selected section (a SettingType)
+	sectionCursor int  // Selected section index into settingsSections (left pane)
+	focusRight    bool // false = section list (left pane) focused, true = detail (right pane)
+	scrollOffset  int  // Scroll offset when content overflows terminal height
+	profile       string
 
 	// Dynamic tool lists (built-in + custom tools from config)
 	toolNames  []string
@@ -163,7 +253,9 @@ func NewSettingsPanel() *SettingsPanel {
 // Show displays the settings panel and loads current config
 func (s *SettingsPanel) Show() {
 	s.visible = true
-	s.cursor = 0
+	s.sectionCursor = 0
+	s.focusRight = false
+	s.cursor = int(settingsSections[0].settings[0])
 	s.scrollOffset = 0
 	s.editingText = false
 	s.needsRestart = false
@@ -192,17 +284,110 @@ func (s *SettingsPanel) NeedsRestart() bool {
 	return s.needsRestart
 }
 
-// ScrollUp moves the settings cursor up by one (mouse wheel support).
+// ScrollUp moves the cursor up by one within the focused pane (mouse wheel support).
 func (s *SettingsPanel) ScrollUp() {
-	if s.visible && s.cursor > 0 {
-		s.cursor--
+	if !s.visible {
+		return
+	}
+	if s.focusRight {
+		s.moveDetail(-1)
+	} else {
+		s.moveSection(-1)
 	}
 }
 
-// ScrollDown moves the settings cursor down by one (mouse wheel support).
+// ScrollDown moves the cursor down by one within the focused pane (mouse wheel support).
 func (s *SettingsPanel) ScrollDown() {
-	if s.visible && s.cursor < settingsCount-1 {
-		s.cursor++
+	if !s.visible {
+		return
+	}
+	if s.focusRight {
+		s.moveDetail(1)
+	} else {
+		s.moveSection(1)
+	}
+}
+
+// currentSection returns the section selected in the left pane.
+func (s *SettingsPanel) currentSection() settingsSection {
+	if s.sectionCursor < 0 || s.sectionCursor >= len(settingsSections) {
+		return settingsSections[0]
+	}
+	return settingsSections[s.sectionCursor]
+}
+
+// moveSection changes the selected section (left pane) and snaps the detail
+// cursor to that section's first editable setting.
+func (s *SettingsPanel) moveSection(delta int) {
+	newIdx := s.sectionCursor + delta
+	if newIdx < 0 || newIdx >= len(settingsSections) {
+		return
+	}
+	s.sectionCursor = newIdx
+	s.scrollOffset = 0
+	if settings := settingsSections[newIdx].settings; len(settings) > 0 {
+		s.cursor = int(settings[0])
+	}
+}
+
+// moveDetail moves the cursor within the current section's settings (right pane).
+func (s *SettingsPanel) moveDetail(delta int) {
+	settings := s.currentSection().settings
+	if len(settings) == 0 {
+		return
+	}
+	pos := 0
+	for i, st := range settings {
+		if int(st) == s.cursor {
+			pos = i
+			break
+		}
+	}
+	newPos := pos + delta
+	if newPos < 0 || newPos >= len(settings) {
+		return
+	}
+	s.cursor = int(settings[newPos])
+}
+
+// enterRightPane focuses the detail pane, snapping the cursor to a valid
+// setting in the current section. Informational sections stay on the left.
+func (s *SettingsPanel) enterRightPane() {
+	settings := s.currentSection().settings
+	if len(settings) == 0 {
+		return
+	}
+	inSection := false
+	for _, st := range settings {
+		if int(st) == s.cursor {
+			inSection = true
+			break
+		}
+	}
+	if !inSection {
+		s.cursor = int(settings[0])
+	}
+	s.focusRight = true
+}
+
+// isAdjustable reports whether the current detail setting is tuned with left/right.
+func (s *SettingsPanel) isAdjustable() bool {
+	return adjustableSettings[SettingType(s.cursor)]
+}
+
+// focusSetting positions the panel on the given setting: selects its section,
+// places the detail cursor on it, and focuses the right pane. Used by tests and
+// any caller that wants to jump straight to a specific setting.
+func (s *SettingsPanel) focusSetting(setting SettingType) {
+	for si, sec := range settingsSections {
+		for _, st := range sec.settings {
+			if st == setting {
+				s.sectionCursor = si
+				s.cursor = int(setting)
+				s.focusRight = true
+				return
+			}
+		}
 	}
 }
 
@@ -516,27 +701,60 @@ func (s *SettingsPanel) Update(msg tea.KeyMsg) (*SettingsPanel, tea.Cmd, bool) {
 		s.Hide()
 		return s, nil, false
 
+	case "tab", "shift+tab":
+		// Toggle focus between the section list and the detail pane.
+		if s.focusRight {
+			s.focusRight = false
+		} else {
+			s.enterRightPane()
+		}
+
 	case "up", "k":
-		if s.cursor > 0 {
-			s.cursor--
+		if s.focusRight {
+			s.moveDetail(-1)
+		} else {
+			s.moveSection(-1)
 		}
 
 	case "down", "j":
-		if s.cursor < settingsCount-1 {
-			s.cursor++
+		if s.focusRight {
+			s.moveDetail(1)
+		} else {
+			s.moveSection(1)
 		}
 
 	case "left", "h":
-		valueChanged = s.adjustValue(-1)
+		// In the detail pane, left tunes adjustable values; on a toggle/text
+		// setting it steps focus back to the section list.
+		if s.focusRight {
+			if s.isAdjustable() {
+				valueChanged = s.adjustValue(-1)
+			} else {
+				s.focusRight = false
+			}
+		}
 
 	case "right", "l":
-		valueChanged = s.adjustValue(1)
+		// From the section list, right enters the detail pane. In the detail
+		// pane, right tunes adjustable values.
+		if !s.focusRight {
+			s.enterRightPane()
+		} else if s.isAdjustable() {
+			valueChanged = s.adjustValue(1)
+		}
 
 	case " ":
-		valueChanged = s.toggleValue()
+		if s.focusRight {
+			valueChanged = s.toggleValue()
+		} else {
+			// Space from the section list opens the section.
+			s.enterRightPane()
+		}
 
 	case "enter":
-		if s.isTextSetting() {
+		if !s.focusRight {
+			s.enterRightPane()
+		} else if s.isTextSetting() {
 			s.startTextEdit()
 		}
 	}
@@ -764,435 +982,103 @@ func (s *SettingsPanel) handleTextEdit(msg tea.KeyMsg) (*SettingsPanel, tea.Cmd,
 	return s, nil, false
 }
 
-// View renders the settings panel
+// View renders the settings panel as a two-pane (sections + detail) layout.
 func (s *SettingsPanel) View() string {
 	if !s.visible {
 		return ""
 	}
 
-	// Styles
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorCyan)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorCyan)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorComment)
+	warningStyle := lipgloss.NewStyle().Foreground(ColorYellow)
 
-	sectionStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorAccent)
-
-	labelStyle := lipgloss.NewStyle().
-		Foreground(ColorText)
-
-	dimStyle := lipgloss.NewStyle().
-		Foreground(ColorComment)
-
-	highlightStyle := lipgloss.NewStyle().
-		Background(ColorSurface)
-
-	warningStyle := lipgloss.NewStyle().
-		Foreground(ColorYellow)
-
-	// Dialog dimensions
-	dialogWidth := 64
-	if s.width > 0 && s.width < dialogWidth+10 {
-		dialogWidth = s.width - 10
-		if dialogWidth < 50 {
-			dialogWidth = 50
-		}
+	// Dialog dimensions. Wider than the old single column to fit two panes;
+	// shrinks (and falls back to a single pane) on narrow terminals.
+	dialogWidth := 78
+	if s.width > 0 && dialogWidth > s.width-4 {
+		dialogWidth = s.width - 4
+	}
+	if dialogWidth < 44 {
+		dialogWidth = 44
+	}
+	innerWidth := dialogWidth - 4 // dialog has Padding(1,2): 2 cells each side
+	if innerWidth < 1 {
+		innerWidth = 1
 	}
 
-	var content strings.Builder
+	const leftPaneWidth = 22
+	const sep = " │ "
+	sepCells := cellWidth(sep)
+	// Need room for both panes plus a usable (>=24 cell) detail column.
+	twoPane := innerWidth >= leftPaneWidth+sepCells+24
 
-	// Title
-	content.WriteString(titleStyle.Render("Settings"))
-	content.WriteString(dimStyle.Render("                                    [Esc] Close"))
-	content.WriteString("\n")
-	content.WriteString(strings.Repeat("-", dialogWidth-4))
-	content.WriteString("\n\n")
-
-	// Theme section
-	content.WriteString(sectionStyle.Render("THEME"))
-	if s.needsRestart {
-		content.WriteString(warningStyle.Render(" (restart required)"))
-	}
-	content.WriteString("\n")
-	themeRow := s.renderRadioGroup(themeNames, s.selectedTheme, s.cursor == int(SettingTheme))
-	if s.cursor == int(SettingTheme) {
-		themeRow = highlightStyle.Render(themeRow)
-	}
-	content.WriteString("  " + themeRow + "\n\n")
-
-	// DEFAULT TOOL
-	content.WriteString(sectionStyle.Render("DEFAULT TOOL"))
-	content.WriteString("\n")
-	line := s.renderRadioGroup(s.toolNames, s.selectedTool, s.cursor == int(SettingDefaultTool))
-	if s.cursor == int(SettingDefaultTool) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + line + "\n")
-	content.WriteString(dimStyle.Render("  Pre-selected when creating new sessions"))
-	content.WriteString("\n\n")
-
-	// CLAUDE
-	content.WriteString(sectionStyle.Render("CLAUDE"))
-	content.WriteString("\n")
-
-	// Dangerous mode checkbox
-	line = s.renderCheckbox("Dangerous mode", s.dangerousMode) + " - Skip permission prompts"
-	if s.cursor == int(SettingDangerousMode) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
-
-	// Config directory
-	line = "Config directory"
-	if s.claudeConfigIsScope && s.profile != "" {
-		line += " (" + s.profile + " profile)"
-	}
-	line += ": "
-	if s.editingText && s.cursor == int(SettingClaudeConfigDir) {
-		line += "[" + s.textBuffer + "|]"
-	} else if s.claudeConfigDir == "" {
-		line += dimStyle.Render("~/.claude (default)")
+	leftRenderWidth := leftPaneWidth
+	rightWidth := innerWidth
+	if twoPane {
+		rightWidth = innerWidth - leftPaneWidth - sepCells
 	} else {
-		line += s.claudeConfigDir
+		leftRenderWidth = innerWidth
 	}
-	if s.cursor == int(SettingClaudeConfigDir) {
-		line = highlightStyle.Render(line)
+
+	// Build each pane as a slice of lines so we can window vertically and, in
+	// two-pane mode, join them row by row at a fixed left-column width.
+	leftLines, leftCursorRow := s.renderSectionList(leftRenderWidth)
+	rightLines, rightCursorRow := s.renderDetailPane(rightWidth)
+
+	var paneRows []string
+	var focusRow int
+	switch {
+	case twoPane:
+		n := len(leftLines)
+		if len(rightLines) > n {
+			n = len(rightLines)
+		}
+		for i := 0; i < n; i++ {
+			var l, r string
+			if i < len(leftLines) {
+				l = leftLines[i]
+			}
+			if i < len(rightLines) {
+				r = rightLines[i]
+			}
+			paneRows = append(paneRows, fitCellWidth(l, leftPaneWidth)+dimStyle.Render(sep)+r)
+		}
+		if s.focusRight {
+			focusRow = rightCursorRow
+		} else {
+			focusRow = leftCursorRow
+		}
+	case s.focusRight:
+		paneRows = rightLines
+		focusRow = rightCursorRow
+	default:
+		paneRows = leftLines
+		focusRow = leftCursorRow
 	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
 
-	// GEMINI
-	content.WriteString(sectionStyle.Render("GEMINI"))
-	content.WriteString("\n")
-
-	// YOLO mode checkbox
-	line = s.renderCheckbox("YOLO mode", s.geminiYoloMode) + " - Auto-approve all actions"
-	if s.cursor == int(SettingGeminiYoloMode) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// CODEX
-	content.WriteString(sectionStyle.Render("CODEX"))
-	content.WriteString("\n")
-
-	// YOLO mode checkbox
-	line = s.renderCheckbox("YOLO mode", s.codexYoloMode) + " - Bypass approvals and sandbox"
-	if s.cursor == int(SettingCodexYoloMode) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// HERMES
-	content.WriteString(sectionStyle.Render("HERMES"))
-	content.WriteString("\n")
-
-	// YOLO mode checkbox
-	line = s.renderCheckbox("YOLO mode", s.hermesYoloMode) + " - Auto-approve all tool calls"
-	if s.cursor == int(SettingHermesYoloMode) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// UPDATES
-	content.WriteString(sectionStyle.Render("UPDATES"))
-	content.WriteString("\n")
-
-	line = s.renderCheckbox("Check for updates on startup", s.checkForUpdates)
-	if s.cursor == int(SettingCheckForUpdates) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
-
-	line = s.renderCheckbox("Auto-install updates", s.autoUpdate)
-	if s.cursor == int(SettingAutoUpdate) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// LOGS
-	content.WriteString(sectionStyle.Render("LOGS"))
-	content.WriteString("\n")
-
-	line = s.renderNumber("Max file size:", s.logMaxSizeMB, "MB")
-	if s.cursor == int(SettingLogMaxSize) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line))
-
-	line = s.renderNumber("    Lines to keep:", s.logMaxLines, "")
-	if s.cursor == int(SettingLogMaxLines) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString(labelStyle.Render(line) + "\n")
-
-	line = s.renderCheckbox("Remove orphan logs", s.removeOrphans)
-	if s.cursor == int(SettingRemoveOrphans) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// GLOBAL SEARCH
-	content.WriteString(sectionStyle.Render("GLOBAL SEARCH"))
+	// Header (title + optional restart notice), bounded to the content width.
+	titleLine := titleStyle.Render("Settings")
 	if s.needsRestart {
-		content.WriteString(warningStyle.Render("  (changes require restart)"))
+		titleLine += warningStyle.Render("  (restart required)")
 	}
-	content.WriteString("\n")
+	header := cellTruncate(titleLine, innerWidth, "") + "\n" + strings.Repeat("-", innerWidth)
 
-	line = s.renderCheckbox("Enabled", s.globalSearchEnabled)
-	if s.cursor == int(SettingGlobalSearchEnabled) {
-		line = highlightStyle.Render(line)
+	helpBar := cellTruncate(
+		dimStyle.Render("Tab/←→ Pane · ↑↓ Move · Space Toggle · Enter Edit · Esc Close"),
+		innerWidth, "",
+	)
+
+	// Vertical windowing of the pane block when it overflows the viewport.
+	const dialogChrome = 4                                                    // border (2) + vertical padding (2)
+	const reserved = 2 /*header*/ + 1 /*blank*/ + 1 /*blank before help*/ + 1 /*help*/
+	availHeight := s.height - dialogChrome - reserved
+	if availHeight < 6 {
+		availHeight = 6
 	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
+	paneBlock := s.windowRows(paneRows, focusRow, availHeight, dimStyle)
 
-	line = "Search tier: " + s.renderRadioGroup(tierNames, s.searchTier, s.cursor == int(SettingSearchTier))
-	if s.cursor == int(SettingSearchTier) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
+	content := header + "\n\n" + paneBlock + "\n\n" + helpBar
 
-	line = s.renderNumber("Recent days:", s.recentDays, "(0 = all)")
-	if s.cursor == int(SettingRecentDays) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// PREVIEW
-	content.WriteString(sectionStyle.Render("PREVIEW"))
-	content.WriteString("\n")
-
-	line = s.renderCheckbox("Show Output", s.showOutput) + " - Terminal output in preview"
-	if s.cursor == int(SettingShowOutput) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
-
-	line = s.renderCheckbox("Show Analytics", s.showAnalytics) + " - Claude analytics panel"
-	if s.cursor == int(SettingShowAnalytics) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
-
-	line = s.renderCheckbox("Show Notes", s.showNotes) + " - Session notes in preview"
-	if s.cursor == int(SettingShowNotes) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
-
-	line = s.renderNumber("Notes/Output split:", s.notesOutputSplit, "%")
-	if s.cursor == int(SettingNotesOutputSplit) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// MAINTENANCE
-	content.WriteString(sectionStyle.Render("MAINTENANCE"))
-	content.WriteString("\n")
-
-	line = s.renderCheckbox(
-		"Auto-maintenance",
-		s.maintenanceEnabled,
-	) + " - Prune logs, clean backups, archive large sessions"
-	if s.cursor == int(SettingMaintenanceEnabled) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// SYSTEM STATS
-	content.WriteString(sectionStyle.Render("SYSTEM STATS"))
-	content.WriteString("\n")
-
-	line = s.renderCheckbox("Enabled", s.statsEnabled) + " - Show CPU, RAM, etc. in status bar"
-	if s.cursor == int(SettingStatsEnabled) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
-
-	line = s.renderNumber("Refresh interval:", s.statsRefreshSecs, "sec")
-	if s.cursor == int(SettingStatsRefresh) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
-
-	line = "Format: " + s.renderRadioGroup(statsFormatNames, s.statsFormat, s.cursor == int(SettingStatsFormat))
-	if s.cursor == int(SettingStatsFormat) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n")
-
-	content.WriteString(dimStyle.Render("  Visible stats:") + "\n")
-
-	line = s.renderCheckbox("CPU", s.statsShowCPU)
-	if s.cursor == int(SettingStatsShowCPU) {
-		line = highlightStyle.Render(line)
-	}
-	cpuCol := "  " + labelStyle.Render(line)
-
-	line = s.renderCheckbox("RAM", s.statsShowRAM)
-	if s.cursor == int(SettingStatsShowRAM) {
-		line = highlightStyle.Render(line)
-	}
-	ramCol := "  " + labelStyle.Render(line)
-
-	line = s.renderCheckbox("Disk", s.statsShowDisk)
-	if s.cursor == int(SettingStatsShowDisk) {
-		line = highlightStyle.Render(line)
-	}
-	diskCol := "  " + labelStyle.Render(line)
-
-	content.WriteString(cpuCol + ramCol + diskCol + "\n")
-
-	line = s.renderCheckbox("Network", s.statsShowNetwork)
-	if s.cursor == int(SettingStatsShowNetwork) {
-		line = highlightStyle.Render(line)
-	}
-	netCol := "  " + labelStyle.Render(line)
-
-	line = s.renderCheckbox("GPU", s.statsShowGPU)
-	if s.cursor == int(SettingStatsShowGPU) {
-		line = highlightStyle.Render(line)
-	}
-	gpuCol := "  " + labelStyle.Render(line)
-
-	line = s.renderCheckbox("Load", s.statsShowLoad)
-	if s.cursor == int(SettingStatsShowLoad) {
-		line = highlightStyle.Render(line)
-	}
-	loadCol := "  " + labelStyle.Render(line)
-
-	content.WriteString(netCol + gpuCol + loadCol + "\n\n")
-
-	// SESSIONS
-	content.WriteString(sectionStyle.Render("SESSIONS"))
-	content.WriteString("\n")
-
-	line = s.renderCheckbox(
-		"Sync session title",
-		s.syncTitle,
-	) + " - Let the agent rename the session (off = keep your title)"
-	if s.cursor == int(SettingSyncTitle) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// DISPLAY
-	content.WriteString(sectionStyle.Render("DISPLAY"))
-	content.WriteString("\n")
-
-	line = s.renderCheckbox("Show session timestamps", s.showSessionTimestamps) + " - Last activity per row"
-	if s.cursor == int(SettingShowSessionTimestamps) {
-		line = highlightStyle.Render(line)
-	}
-	content.WriteString("  " + labelStyle.Render(line) + "\n\n")
-
-	// MCP & TOOLS
-	content.WriteString(sectionStyle.Render("MCP SERVERS & CUSTOM TOOLS"))
-	content.WriteString("\n")
-	content.WriteString(dimStyle.Render("  Edit " + userConfigPathForDisplay() + " to configure MCPs and tools."))
-	content.WriteString("\n")
-	hotkeys := resolveHotkeys(session.GetHotkeyOverrides())
-	mcpKey := actionHotkey(hotkeys, hotkeyMCPManager)
-	mcpHint := "  MCP Manager hotkey is unbound."
-	if mcpKey != "" {
-		mcpHint = fmt.Sprintf("  Press %s on any Claude, Gemini, or Cursor session to attach MCPs.", mcpKey)
-	}
-	content.WriteString(dimStyle.Render(mcpHint))
-	content.WriteString("\n\n")
-
-	// Help bar
-	content.WriteString(dimStyle.Render("j/k Navigate  Space Toggle  h/l Adjust  Enter Edit  Esc Close"))
-
-	// Apply scroll windowing if content overflows available terminal height.
-	// The dialog box adds 4 lines of chrome: border (top+bottom) + padding (top+bottom).
-	contentStr := content.String()
-	const dialogChrome = 4
-	availHeight := s.height - dialogChrome
-	if availHeight < 10 {
-		availHeight = 10
-	}
-
-	contentLines := strings.Split(strings.TrimRight(contentStr, "\n"), "\n")
-	totalLines := len(contentLines)
-
-	if totalLines > availHeight && s.height > 0 {
-		// Map cursor index to content line number (based on the fixed layout above).
-		// Update this mapping if settings are added/removed/reordered.
-		cursorToLine := [settingsCount]int{
-			4,  // SettingTheme
-			7,  // SettingDefaultTool
-			11, // SettingDangerousMode
-			12, // SettingClaudeConfigDir
-			15, // SettingGeminiYoloMode
-			18, // SettingCodexYoloMode
-			21, // SettingHermesYoloMode
-			24, // SettingCheckForUpdates
-			25, // SettingAutoUpdate
-			28, // SettingLogMaxSize
-			28, // SettingLogMaxLines (shares line with LogMaxSize)
-			29, // SettingRemoveOrphans
-			32, // SettingGlobalSearchEnabled
-			33, // SettingSearchTier
-			34, // SettingRecentDays
-			37, // SettingShowOutput
-			38, // SettingShowAnalytics
-			39, // SettingShowNotes
-			40, // SettingNotesOutputSplit
-			43, // SettingMaintenanceEnabled
-			46, // SettingStatsEnabled
-			47, // SettingStatsRefresh
-			48, // SettingStatsFormat
-			50, // SettingStatsShowCPU (row with RAM, Disk)
-			50, // SettingStatsShowRAM
-			50, // SettingStatsShowDisk
-			51, // SettingStatsShowNetwork (row with GPU, Load)
-			51, // SettingStatsShowGPU
-			51, // SettingStatsShowLoad
-			54, // SettingSyncTitle (SESSIONS section, after stats)
-			57, // SettingShowSessionTimestamps (DISPLAY section, after SESSIONS)
-		}
-		cursorLine := cursorToLine[s.cursor]
-
-		// Ensure cursor is visible with 2 lines of context
-		if cursorLine-2 < s.scrollOffset {
-			s.scrollOffset = cursorLine - 2
-		}
-		if cursorLine+2 >= s.scrollOffset+availHeight {
-			s.scrollOffset = cursorLine - availHeight + 3
-		}
-		if s.scrollOffset < 0 {
-			s.scrollOffset = 0
-		}
-		if maxOff := totalLines - availHeight; s.scrollOffset > maxOff {
-			s.scrollOffset = maxOff
-		}
-
-		// Determine visible window, replacing edge content lines with scroll indicators
-		startLine := s.scrollOffset
-		endLine := s.scrollOffset + availHeight
-		if endLine > totalLines {
-			endLine = totalLines
-		}
-		showScrollUp := startLine > 0
-		showScrollDown := endLine < totalLines
-		if showScrollUp {
-			startLine++
-		}
-		if showScrollDown {
-			endLine--
-		}
-
-		var scrolled strings.Builder
-		if showScrollUp {
-			scrolled.WriteString(dimStyle.Render("  ▲ more above") + "\n")
-		}
-		scrolled.WriteString(strings.Join(contentLines[startLine:endLine], "\n"))
-		if showScrollDown {
-			scrolled.WriteString("\n" + dimStyle.Render("  ▼ more below"))
-		}
-		contentStr = scrolled.String()
-	}
-
-	// Wrap in dialog box
 	dialogStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorCyan).
@@ -1200,16 +1086,230 @@ func (s *SettingsPanel) View() string {
 		Padding(1, 2).
 		Width(dialogWidth)
 
-	dialog := dialogStyle.Render(contentStr)
+	dialog := dialogStyle.Render(content)
 
-	// Center the dialog
-	return lipgloss.Place(
-		s.width,
-		s.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		dialog,
-	)
+	return lipgloss.Place(s.width, s.height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+// windowRows returns rows joined with newlines, scrolled so focusRow stays
+// visible when the slice is taller than avail. Scroll indicators replace the
+// edge rows. Mutates s.scrollOffset (the persisted window position), matching
+// the pre-redesign scroll behavior.
+func (s *SettingsPanel) windowRows(rows []string, focusRow, avail int, dimStyle lipgloss.Style) string {
+	total := len(rows)
+	if total <= avail {
+		s.scrollOffset = 0
+		return strings.Join(rows, "\n")
+	}
+	if focusRow-1 < s.scrollOffset {
+		s.scrollOffset = focusRow - 1
+	}
+	if focusRow+1 >= s.scrollOffset+avail {
+		s.scrollOffset = focusRow - avail + 2
+	}
+	if s.scrollOffset < 0 {
+		s.scrollOffset = 0
+	}
+	if maxOff := total - avail; s.scrollOffset > maxOff {
+		s.scrollOffset = maxOff
+	}
+	start := s.scrollOffset
+	end := s.scrollOffset + avail
+	if end > total {
+		end = total
+	}
+	showUp := start > 0
+	showDown := end < total
+	if showUp {
+		start++
+	}
+	if showDown {
+		end--
+	}
+	var b strings.Builder
+	if showUp {
+		b.WriteString(dimStyle.Render("  ▲ more above") + "\n")
+	}
+	b.WriteString(strings.Join(rows[start:end], "\n"))
+	if showDown {
+		b.WriteString("\n" + dimStyle.Render("  ▼ more below"))
+	}
+	return b.String()
+}
+
+// renderSectionList builds the left (master) pane: a header plus one row per
+// section. Returns the lines and the row index of the selected section.
+func (s *SettingsPanel) renderSectionList(width int) ([]string, int) {
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
+	selStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorCyan)
+	activeStyle := lipgloss.NewStyle().Background(ColorSurface).Foreground(ColorCyan).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorTextDim)
+
+	lines := []string{headerStyle.Render("SECTIONS")}
+	cursorRow := 1
+	for i, sec := range settingsSections {
+		switch {
+		case i == s.sectionCursor && !s.focusRight:
+			lines = append(lines, activeStyle.Render(fitCellWidth("▸ "+sec.title, width)))
+		case i == s.sectionCursor:
+			lines = append(lines, selStyle.Render("▸ "+sec.title))
+		default:
+			lines = append(lines, dimStyle.Render("  "+sec.title))
+		}
+		if i == s.sectionCursor {
+			cursorRow = 1 + i
+		}
+	}
+	return lines, cursorRow
+}
+
+// renderDetailPane builds the right (detail) pane for the selected section.
+// Returns the lines and the row index of the active setting.
+func (s *SettingsPanel) renderDetailPane(width int) ([]string, int) {
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorComment)
+
+	sec := s.currentSection()
+	ruleLen := width
+	if ruleLen > 28 {
+		ruleLen = 28
+	}
+	lines := []string{
+		sectionStyle.Render(strings.ToUpper(sec.title)),
+		dimStyle.Render(strings.Repeat("─", ruleLen)),
+	}
+	cursorRow := 0
+
+	if sec.info {
+		hotkeys := resolveHotkeys(session.GetHotkeyOverrides())
+		mcpKey := actionHotkey(hotkeys, hotkeyMCPManager)
+		keyLine := "MCP Manager hotkey is unbound."
+		if mcpKey != "" {
+			keyLine = "MCP Manager hotkey: " + mcpKey
+		}
+		info := []string{
+			"Edit your config file to add",
+			"MCP servers and custom tools:",
+			userConfigPathForDisplay(),
+			"",
+			keyLine,
+			"",
+			"Attach MCPs on any Claude,",
+			"Gemini, or Cursor session.",
+		}
+		for _, l := range info {
+			lines = append(lines, dimStyle.Render(cellTruncate(l, width, "")))
+		}
+		return lines, cursorRow
+	}
+
+	for _, st := range sec.settings {
+		if int(st) == s.cursor {
+			cursorRow = len(lines)
+		}
+		focused := s.focusRight && int(st) == s.cursor
+		lines = append(lines, s.renderSettingRow(st, focused, width)...)
+	}
+	return lines, cursorRow
+}
+
+// renderSettingRow renders a single detail-pane setting (one main line plus an
+// optional dim hint line), truncated to width and highlighted when focused.
+func (s *SettingsPanel) renderSettingRow(setting SettingType, focused bool, width int) []string {
+	labelStyle := lipgloss.NewStyle().Foreground(ColorText)
+	dimStyle := lipgloss.NewStyle().Foreground(ColorComment)
+	highlightStyle := lipgloss.NewStyle().Background(ColorSurface)
+
+	var main, hint string
+	switch setting {
+	case SettingTheme:
+		main = "Theme: " + s.renderRadioGroup(themeNames, s.selectedTheme, focused)
+	case SettingShowOutput:
+		main = s.renderCheckbox("Show Output", s.showOutput) + " - Terminal output"
+	case SettingShowAnalytics:
+		main = s.renderCheckbox("Show Analytics", s.showAnalytics) + " - Analytics panel"
+	case SettingShowNotes:
+		main = s.renderCheckbox("Show Notes", s.showNotes) + " - Session notes"
+	case SettingNotesOutputSplit:
+		main = s.renderNumber("Notes/Output split:", s.notesOutputSplit, "%")
+	case SettingDefaultTool:
+		main = "Default tool: " + s.renderRadioGroup(s.toolNames, s.selectedTool, focused)
+		hint = "Pre-selected for new sessions"
+	case SettingDangerousMode:
+		main = s.renderCheckbox("Dangerous mode", s.dangerousMode) + " - Skip permission prompts"
+	case SettingClaudeConfigDir:
+		line := "Config dir"
+		if s.claudeConfigIsScope && s.profile != "" {
+			line += " (" + s.profile + ")"
+		}
+		line += ": "
+		if s.editingText && s.cursor == int(SettingClaudeConfigDir) {
+			line += "[" + s.textBuffer + "|]"
+		} else if s.claudeConfigDir == "" {
+			line += "~/.claude (default)"
+		} else {
+			line += s.claudeConfigDir
+		}
+		main = line
+	case SettingGeminiYoloMode:
+		main = s.renderCheckbox("YOLO mode", s.geminiYoloMode) + " - Auto-approve all actions"
+	case SettingCodexYoloMode:
+		main = s.renderCheckbox("YOLO mode", s.codexYoloMode) + " - Bypass approvals and sandbox"
+	case SettingHermesYoloMode:
+		main = s.renderCheckbox("YOLO mode", s.hermesYoloMode) + " - Auto-approve all tool calls"
+	case SettingCheckForUpdates:
+		main = s.renderCheckbox("Check for updates on startup", s.checkForUpdates)
+	case SettingAutoUpdate:
+		main = s.renderCheckbox("Auto-install updates", s.autoUpdate)
+	case SettingLogMaxSize:
+		main = s.renderNumber("Max file size:", s.logMaxSizeMB, "MB")
+	case SettingLogMaxLines:
+		main = s.renderNumber("Lines to keep:", s.logMaxLines, "")
+	case SettingGlobalSearchEnabled:
+		main = s.renderCheckbox("Enabled", s.globalSearchEnabled)
+	case SettingSearchTier:
+		main = "Search tier: " + s.renderRadioGroup(tierNames, s.searchTier, focused)
+	case SettingRecentDays:
+		main = s.renderNumber("Recent days:", s.recentDays, "(0 = all)")
+	case SettingRemoveOrphans:
+		main = s.renderCheckbox("Remove orphan logs", s.removeOrphans)
+	case SettingMaintenanceEnabled:
+		main = s.renderCheckbox("Auto-maintenance", s.maintenanceEnabled)
+		hint = "Prune logs, clean backups, archive"
+	case SettingStatsEnabled:
+		main = s.renderCheckbox("Enabled", s.statsEnabled) + " - Status bar stats"
+	case SettingStatsRefresh:
+		main = s.renderNumber("Refresh interval:", s.statsRefreshSecs, "sec")
+	case SettingStatsFormat:
+		main = "Format: " + s.renderRadioGroup(statsFormatNames, s.statsFormat, focused)
+	case SettingStatsShowCPU:
+		main = s.renderCheckbox("Show CPU", s.statsShowCPU)
+	case SettingStatsShowRAM:
+		main = s.renderCheckbox("Show RAM", s.statsShowRAM)
+	case SettingStatsShowDisk:
+		main = s.renderCheckbox("Show Disk", s.statsShowDisk)
+	case SettingStatsShowNetwork:
+		main = s.renderCheckbox("Show Network", s.statsShowNetwork)
+	case SettingStatsShowGPU:
+		main = s.renderCheckbox("Show GPU", s.statsShowGPU)
+	case SettingStatsShowLoad:
+		main = s.renderCheckbox("Show Load", s.statsShowLoad)
+	case SettingSyncTitle:
+		main = s.renderCheckbox("Sync session title", s.syncTitle)
+		hint = "Let the agent rename the session"
+	case SettingShowSessionTimestamps:
+		main = s.renderCheckbox("Show session timestamps", s.showSessionTimestamps)
+		hint = "Last activity per row"
+	}
+
+	if focused {
+		main = highlightStyle.Render(main)
+	}
+	out := []string{cellTruncate("  "+labelStyle.Render(main), width, "")}
+	if hint != "" {
+		out = append(out, cellTruncate("    "+dimStyle.Render(hint), width, ""))
+	}
+	return out
 }
 
 // renderCheckbox renders a checkbox with label
