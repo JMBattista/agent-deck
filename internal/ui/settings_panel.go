@@ -46,10 +46,93 @@ const (
 	SettingStatsShowLoad
 	SettingSyncTitle
 	SettingShowSessionTimestamps
+
+	// --- Registry-driven settings (see settings_defs.go). These were
+	// previously editable only by hand-editing config.toml; they are wired into
+	// the TUI through the declarative settingDefs table rather than bespoke
+	// switch cases. Appending here keeps the legacy indices (0..30) stable.
+
+	// Interface ([ui])
+	SettingPreviewPct
+	SettingFooter
+	SettingITermOpenAs
+	SettingShowOnlyInstalledTools
+	SettingNewSessionEnterAdvances
+	SettingRemoteLatencyRefreshSecs
+	SettingRemoteSessionRefreshSecs
+
+	// Agents — Claude (additional)
+	SettingClaudeCommand
+	SettingClaudeAllowDangerousMode
+	SettingClaudeAutoMode
+	SettingClaudeDefaultModel
+	SettingClaudeUseChrome
+	SettingClaudeUseTeammateMode
+	SettingClaudeEnvFile
+	SettingClaudeHooksEnabled
+	SettingClaudeAutoResumeSummary
+	SettingClaudeVimMode
+
+	// Agents — Gemini (additional)
+	SettingGeminiDefaultModel
+	SettingGeminiEnvFile
+	SettingGeminiCommand
+
+	// Agents — OpenCode
+	SettingOpenCodeDefaultModel
+	SettingOpenCodeDefaultAgent
+	SettingOpenCodeEnvFile
+	SettingOpenCodeCommand
+
+	// Agents — Codex (additional)
+	SettingCodexCommand
+	SettingCodexConfigDir
+	SettingCodexEnvFile
+
+	// Agents — Copilot
+	SettingCopilotEnvFile
+	SettingCopilotCommand
+	SettingCopilotDefaultModel
+	SettingCopilotAllowAll
+
+	// Agents — Hermes (additional)
+	SettingHermesCommand
+	SettingHermesEnvFile
+	SettingHermesGatewayURL
+	SettingHermesDashboardURL
+	SettingHermesAPITokenEnv
+	SettingHermesWorkspaceDir
+
+	// Agents — Crush
+	SettingCrushCommand
+	SettingCrushEnvFile
+	SettingCrushYoloMode
+
+	// Worktree
+	SettingWorktreeAutoCleanup
+	SettingWorktreeDefaultEnabled
+	SettingWorktreeDefaultLocation
+	SettingWorktreePathTemplate
+	SettingWorktreeBranchPrefix
+	SettingWorktreeSetupTimeout
+
+	// Tmux
+	SettingTmuxInjectStatusLine
+	SettingTmuxMouse
+	SettingTmuxLaunchInUserScope
+	SettingTmuxLaunchAs
+	SettingTmuxWindowStyleOverride
+	SettingTmuxClearOnRestart
+	SettingTmuxDetachKey
+	SettingTmuxSocketName
+
+	// Instances
+	SettingInstancesAllowMultiple
+	SettingInstancesFollowCwdOnAttach
 )
 
-// Total number of navigable settings.
-const settingsCount = 31
+// Total number of navigable settings (legacy 31 + registry-driven expansion).
+const settingsCount = 87
 
 // settingsSection groups related settings for the left (master) pane. Each
 // section's settings are shown in the right (detail) pane when the section is
@@ -72,21 +155,91 @@ var settingsSections = []settingsSection{
 		SettingShowNotes,
 		SettingNotesOutputSplit,
 	}},
+	{title: "Interface", settings: []SettingType{
+		SettingPreviewPct,
+		SettingFooter,
+		SettingITermOpenAs,
+		SettingShowOnlyInstalledTools,
+		SettingNewSessionEnterAdvances,
+		SettingRemoteLatencyRefreshSecs,
+		SettingRemoteSessionRefreshSecs,
+	}},
 	{title: "Agents — Shared", settings: []SettingType{
 		SettingDefaultTool,
 		SettingDangerousMode,
 	}},
 	{title: "Agents — Claude", settings: []SettingType{
 		SettingClaudeConfigDir,
+		SettingClaudeCommand,
+		SettingClaudeDefaultModel,
+		SettingClaudeEnvFile,
+		SettingClaudeAllowDangerousMode,
+		SettingClaudeAutoMode,
+		SettingClaudeUseChrome,
+		SettingClaudeUseTeammateMode,
+		SettingClaudeHooksEnabled,
+		SettingClaudeAutoResumeSummary,
+		SettingClaudeVimMode,
 	}},
 	{title: "Agents — Gemini", settings: []SettingType{
 		SettingGeminiYoloMode,
+		SettingGeminiDefaultModel,
+		SettingGeminiEnvFile,
+		SettingGeminiCommand,
+	}},
+	{title: "Agents — OpenCode", settings: []SettingType{
+		SettingOpenCodeDefaultModel,
+		SettingOpenCodeDefaultAgent,
+		SettingOpenCodeEnvFile,
+		SettingOpenCodeCommand,
 	}},
 	{title: "Agents — Codex", settings: []SettingType{
 		SettingCodexYoloMode,
+		SettingCodexCommand,
+		SettingCodexConfigDir,
+		SettingCodexEnvFile,
+	}},
+	{title: "Agents — Copilot", settings: []SettingType{
+		SettingCopilotDefaultModel,
+		SettingCopilotEnvFile,
+		SettingCopilotCommand,
+		SettingCopilotAllowAll,
 	}},
 	{title: "Agents — Hermes", settings: []SettingType{
 		SettingHermesYoloMode,
+		SettingHermesCommand,
+		SettingHermesEnvFile,
+		SettingHermesGatewayURL,
+		SettingHermesDashboardURL,
+		SettingHermesAPITokenEnv,
+		SettingHermesWorkspaceDir,
+	}},
+	{title: "Agents — Crush", settings: []SettingType{
+		SettingCrushCommand,
+		SettingCrushEnvFile,
+		SettingCrushYoloMode,
+	}},
+	{title: "Worktree", settings: []SettingType{
+		SettingWorktreeAutoCleanup,
+		SettingWorktreeDefaultEnabled,
+		SettingWorktreeDefaultLocation,
+		SettingWorktreePathTemplate,
+		SettingWorktreeBranchPrefix,
+		SettingWorktreeSetupTimeout,
+	}},
+	{title: "Tmux", settings: []SettingType{
+		SettingTmuxInjectStatusLine,
+		SettingTmuxMouse,
+		SettingTmuxLaunchInUserScope,
+		SettingTmuxLaunchAs,
+		SettingTmuxWindowStyleOverride,
+		SettingTmuxClearOnRestart,
+		SettingTmuxDetachKey,
+		SettingTmuxSocketName,
+	}},
+	{title: "Instances", settings: []SettingType{
+		SettingInstancesAllowMultiple,
+		SettingInstancesFollowCwdOnAttach,
 	}},
 	{title: "Updates", settings: []SettingType{
 		SettingCheckForUpdates,
@@ -190,6 +343,14 @@ type SettingsPanel struct {
 
 	showSessionTimestamps bool
 
+	// Registry-driven value stores (settings_defs.go). Keyed by SettingType.
+	// Legacy settings keep their dedicated fields above; everything in the
+	// settingDefs table is backed by these generic maps.
+	newBool map[SettingType]bool
+	newInt  map[SettingType]int
+	newEnum map[SettingType]int // selected radio index
+	newText map[SettingType]string
+
 	// Text input state
 	editingText bool
 	textBuffer  string
@@ -229,6 +390,10 @@ var (
 // NewSettingsPanel creates a new settings panel
 func NewSettingsPanel() *SettingsPanel {
 	return &SettingsPanel{
+		newBool:             make(map[SettingType]bool),
+		newInt:              make(map[SettingType]int),
+		newEnum:             make(map[SettingType]int),
+		newText:             make(map[SettingType]string),
 		toolNames:           append(append([]string{}, builtinToolNames...), "None"),
 		toolValues:          append(append([]string{}, builtinToolValues...), ""),
 		logMaxSizeMB:        10,
@@ -371,8 +536,17 @@ func (s *SettingsPanel) enterRightPane() {
 }
 
 // isAdjustable reports whether the current detail setting is tuned with left/right.
+// Legacy radios/numbers are listed in adjustableSettings; registry enum/int
+// entries are adjustable by virtue of their kind.
 func (s *SettingsPanel) isAdjustable() bool {
-	return adjustableSettings[SettingType(s.cursor)]
+	key := SettingType(s.cursor)
+	if adjustableSettings[key] {
+		return true
+	}
+	if def := defFor(key); def != nil {
+		return def.kind == inputEnum || def.kind == inputInt
+	}
+	return false
 }
 
 // focusSetting positions the panel on the given setting: selects its section,
@@ -516,6 +690,30 @@ func (s *SettingsPanel) LoadConfig(config *session.UserConfig) {
 
 	// Display settings
 	s.showSessionTimestamps = config.Display.ShowSessionTimestamps
+
+	// Registry-driven settings (settings_defs.go): each entry binds itself to
+	// a config field via its load closure.
+	s.ensureValueMaps()
+	for i := range settingDefs {
+		settingDefs[i].load(s, config)
+	}
+}
+
+// ensureValueMaps lazily allocates the registry value stores so LoadConfig /
+// GetConfig are safe even if the panel was constructed without NewSettingsPanel.
+func (s *SettingsPanel) ensureValueMaps() {
+	if s.newBool == nil {
+		s.newBool = make(map[SettingType]bool)
+	}
+	if s.newInt == nil {
+		s.newInt = make(map[SettingType]int)
+	}
+	if s.newEnum == nil {
+		s.newEnum = make(map[SettingType]int)
+	}
+	if s.newText == nil {
+		s.newText = make(map[SettingType]string)
+	}
 }
 
 func (s *SettingsPanel) buildToolLists(config *session.UserConfig) {
@@ -555,6 +753,25 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 		DefaultTool: "",
 		Tools:       make(map[string]session.ToolDef),
 		MCPs:        make(map[string]session.MCPDef),
+	}
+
+	// Base-copy the sub-structs the panel now partially edits so fields NOT
+	// surfaced in the TUI (Claude.ExtraArgs, Tmux.Options, Worktree internals,
+	// etc.) survive a save. The explicit legacy writes and the registry save
+	// loop below overwrite only the exposed fields. Same #710/#584 preservation
+	// contract, applied per-struct now that these tables are partly editable.
+	if s.originalConfig != nil {
+		config.Claude = s.originalConfig.Claude
+		config.Gemini = s.originalConfig.Gemini
+		config.OpenCode = s.originalConfig.OpenCode
+		config.Codex = s.originalConfig.Codex
+		config.Copilot = s.originalConfig.Copilot
+		config.Hermes = s.originalConfig.Hermes
+		config.Crush = s.originalConfig.Crush
+		config.Worktree = s.originalConfig.Worktree
+		config.Tmux = s.originalConfig.Tmux
+		config.UI = s.originalConfig.UI
+		config.Instances = s.originalConfig.Instances
 	}
 
 	// Theme
@@ -654,12 +871,9 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 		config.Docker = s.originalConfig.Docker
 		config.Preview.Analytics = s.originalConfig.Preview.Analytics
 		config.Profiles = s.originalConfig.Profiles
-		config.Worktree = s.originalConfig.Worktree
-		// Tmux settings (#710): preserve [tmux] table — Settings TUI does not
-		// expose these fields, so without this copy the entire [tmux] block
-		// (inject_status_line, launch_in_user_scope, detach_key, options …)
-		// vanishes on save. Same class of bug as #584 (Worktree).
-		config.Tmux = s.originalConfig.Tmux
+		// Worktree and Tmux are base-copied above and their exposed fields are
+		// re-applied by the registry save loop below; non-exposed siblings
+		// (Tmux.Options, Worktree path internals) ride through on the base copy.
 		// Fork settings are not exposed in SettingsPanel; preserve the whole
 		// [fork] table so saving visible settings cannot reset quick-fork defaults.
 		config.Fork = s.originalConfig.Fork
@@ -677,6 +891,14 @@ func (s *SettingsPanel) GetConfig() *session.UserConfig {
 		profileCfg := config.Profiles[s.profile]
 		profileCfg.Claude.ConfigDir = s.claudeConfigDir
 		config.Profiles[s.profile] = profileCfg
+	}
+
+	// Registry-driven settings (settings_defs.go): write current values back
+	// onto the base-copied sub-structs. Runs last so exposed fields win while
+	// hidden sibling fields (preserved by the base copy) ride through.
+	s.ensureValueMaps()
+	for i := range settingDefs {
+		settingDefs[i].save(s, config)
 	}
 
 	return config
@@ -765,6 +987,37 @@ func (s *SettingsPanel) Update(msg tea.KeyMsg) (*SettingsPanel, tea.Cmd, bool) {
 // adjustValue changes a radio or number value by delta
 func (s *SettingsPanel) adjustValue(delta int) bool {
 	setting := SettingType(s.cursor)
+
+	// Registry-driven enum/int settings tune generically from their metadata.
+	if def := defFor(setting); def != nil {
+		switch def.kind {
+		case inputEnum:
+			newVal := s.newEnum[setting] + delta
+			if newVal >= 0 && newVal < len(def.enumValues) {
+				s.newEnum[setting] = newVal
+				return true
+			}
+			return false
+		case inputInt:
+			step := def.step
+			if step == 0 {
+				step = 1
+			}
+			newVal := s.newInt[setting] + delta*step
+			if newVal < def.min {
+				newVal = def.min
+			}
+			if newVal > def.max {
+				newVal = def.max
+			}
+			if newVal != s.newInt[setting] {
+				s.newInt[setting] = newVal
+				return true
+			}
+			return false
+		}
+	}
+
 	changed := false
 
 	switch setting {
@@ -844,6 +1097,15 @@ func (s *SettingsPanel) adjustValue(delta int) bool {
 // toggleValue toggles a checkbox value
 func (s *SettingsPanel) toggleValue() bool {
 	setting := SettingType(s.cursor)
+
+	// Registry-driven bool settings toggle generically.
+	if def := defFor(setting); def != nil {
+		if def.kind == inputBool {
+			s.newBool[setting] = !s.newBool[setting]
+			return true
+		}
+		return false
+	}
 
 	switch setting {
 	case SettingDangerousMode:
@@ -935,9 +1197,17 @@ func (s *SettingsPanel) toggleValue() bool {
 	return false
 }
 
-// isTextSetting returns true if current setting uses text input
+// isTextSetting returns true if current setting uses text input. Covers the
+// legacy Claude config dir plus every registry literal (string/path/command).
 func (s *SettingsPanel) isTextSetting() bool {
-	return SettingType(s.cursor) == SettingClaudeConfigDir
+	setting := SettingType(s.cursor)
+	if setting == SettingClaudeConfigDir {
+		return true
+	}
+	if def := defFor(setting); def != nil {
+		return def.kind == inputLiteral
+	}
+	return false
 }
 
 // startTextEdit begins text editing for current setting
@@ -945,6 +1215,11 @@ func (s *SettingsPanel) startTextEdit() {
 	setting := SettingType(s.cursor)
 	if setting == SettingClaudeConfigDir {
 		s.textBuffer = s.claudeConfigDir
+		s.editingText = true
+		return
+	}
+	if def := defFor(setting); def != nil && def.kind == inputLiteral {
+		s.textBuffer = s.newText[setting]
 		s.editingText = true
 	}
 }
@@ -956,8 +1231,11 @@ func (s *SettingsPanel) handleTextEdit(msg tea.KeyMsg) (*SettingsPanel, tea.Cmd,
 	switch key {
 	case "enter":
 		// Save the text
-		if SettingType(s.cursor) == SettingClaudeConfigDir {
+		setting := SettingType(s.cursor)
+		if setting == SettingClaudeConfigDir {
 			s.claudeConfigDir = s.textBuffer
+		} else if def := defFor(setting); def != nil && def.kind == inputLiteral {
+			s.newText[setting] = s.textBuffer
 		}
 		s.editingText = false
 		return s, nil, true
@@ -1221,85 +1499,89 @@ func (s *SettingsPanel) renderSettingRow(setting SettingType, focused bool, widt
 	highlightStyle := lipgloss.NewStyle().Background(ColorSurface)
 
 	var main, hint string
-	switch setting {
-	case SettingTheme:
-		main = "Theme: " + s.renderRadioGroup(themeNames, s.selectedTheme, focused)
-	case SettingShowOutput:
-		main = s.renderCheckbox("Show Output", s.showOutput) + " - Terminal output"
-	case SettingShowAnalytics:
-		main = s.renderCheckbox("Show Analytics", s.showAnalytics) + " - Analytics panel"
-	case SettingShowNotes:
-		main = s.renderCheckbox("Show Notes", s.showNotes) + " - Session notes"
-	case SettingNotesOutputSplit:
-		main = s.renderNumber("Notes/Output split:", s.notesOutputSplit, "%")
-	case SettingDefaultTool:
-		main = "Default tool: " + s.renderRadioGroup(s.toolNames, s.selectedTool, focused)
-		hint = "Pre-selected for new sessions"
-	case SettingDangerousMode:
-		main = s.renderCheckbox("Dangerous mode", s.dangerousMode) + " - Skip permission prompts"
-	case SettingClaudeConfigDir:
-		line := "Config dir"
-		if s.claudeConfigIsScope && s.profile != "" {
-			line += " (" + s.profile + ")"
+	if def := defFor(setting); def != nil {
+		main, hint = s.renderRegistryRow(def, focused)
+	} else {
+		switch setting {
+		case SettingTheme:
+			main = "Theme: " + s.renderRadioGroup(themeNames, s.selectedTheme, focused)
+		case SettingShowOutput:
+			main = s.renderCheckbox("Show Output", s.showOutput) + " - Terminal output"
+		case SettingShowAnalytics:
+			main = s.renderCheckbox("Show Analytics", s.showAnalytics) + " - Analytics panel"
+		case SettingShowNotes:
+			main = s.renderCheckbox("Show Notes", s.showNotes) + " - Session notes"
+		case SettingNotesOutputSplit:
+			main = s.renderNumber("Notes/Output split:", s.notesOutputSplit, "%")
+		case SettingDefaultTool:
+			main = "Default tool: " + s.renderRadioGroup(s.toolNames, s.selectedTool, focused)
+			hint = "Pre-selected for new sessions"
+		case SettingDangerousMode:
+			main = s.renderCheckbox("Dangerous mode", s.dangerousMode) + " - Skip permission prompts"
+		case SettingClaudeConfigDir:
+			line := "Config dir"
+			if s.claudeConfigIsScope && s.profile != "" {
+				line += " (" + s.profile + ")"
+			}
+			line += ": "
+			if s.editingText && s.cursor == int(SettingClaudeConfigDir) {
+				line += "[" + s.textBuffer + "|]"
+			} else if s.claudeConfigDir == "" {
+				line += "~/.claude (default)"
+			} else {
+				line += s.claudeConfigDir
+			}
+			main = line
+		case SettingGeminiYoloMode:
+			main = s.renderCheckbox("YOLO mode", s.geminiYoloMode) + " - Auto-approve all actions"
+		case SettingCodexYoloMode:
+			main = s.renderCheckbox("YOLO mode", s.codexYoloMode) + " - Bypass approvals and sandbox"
+		case SettingHermesYoloMode:
+			main = s.renderCheckbox("YOLO mode", s.hermesYoloMode) + " - Auto-approve all tool calls"
+		case SettingCheckForUpdates:
+			main = s.renderCheckbox("Check for updates on startup", s.checkForUpdates)
+		case SettingAutoUpdate:
+			main = s.renderCheckbox("Auto-install updates", s.autoUpdate)
+		case SettingLogMaxSize:
+			main = s.renderNumber("Max file size:", s.logMaxSizeMB, "MB")
+		case SettingLogMaxLines:
+			main = s.renderNumber("Lines to keep:", s.logMaxLines, "")
+		case SettingGlobalSearchEnabled:
+			main = s.renderCheckbox("Enabled", s.globalSearchEnabled)
+		case SettingSearchTier:
+			main = "Search tier: " + s.renderRadioGroup(tierNames, s.searchTier, focused)
+		case SettingRecentDays:
+			main = s.renderNumber("Recent days:", s.recentDays, "(0 = all)")
+		case SettingRemoveOrphans:
+			main = s.renderCheckbox("Remove orphan logs", s.removeOrphans)
+		case SettingMaintenanceEnabled:
+			main = s.renderCheckbox("Auto-maintenance", s.maintenanceEnabled)
+			hint = "Prune logs, clean backups, archive"
+		case SettingStatsEnabled:
+			main = s.renderCheckbox("Enabled", s.statsEnabled) + " - Status bar stats"
+		case SettingStatsRefresh:
+			main = s.renderNumber("Refresh interval:", s.statsRefreshSecs, "sec")
+		case SettingStatsFormat:
+			main = "Format: " + s.renderRadioGroup(statsFormatNames, s.statsFormat, focused)
+		case SettingStatsShowCPU:
+			main = s.renderCheckbox("Show CPU", s.statsShowCPU)
+		case SettingStatsShowRAM:
+			main = s.renderCheckbox("Show RAM", s.statsShowRAM)
+		case SettingStatsShowDisk:
+			main = s.renderCheckbox("Show Disk", s.statsShowDisk)
+		case SettingStatsShowNetwork:
+			main = s.renderCheckbox("Show Network", s.statsShowNetwork)
+		case SettingStatsShowGPU:
+			main = s.renderCheckbox("Show GPU", s.statsShowGPU)
+		case SettingStatsShowLoad:
+			main = s.renderCheckbox("Show Load", s.statsShowLoad)
+		case SettingSyncTitle:
+			main = s.renderCheckbox("Sync session title", s.syncTitle)
+			hint = "Let the agent rename the session"
+		case SettingShowSessionTimestamps:
+			main = s.renderCheckbox("Show session timestamps", s.showSessionTimestamps)
+			hint = "Last activity per row"
 		}
-		line += ": "
-		if s.editingText && s.cursor == int(SettingClaudeConfigDir) {
-			line += "[" + s.textBuffer + "|]"
-		} else if s.claudeConfigDir == "" {
-			line += "~/.claude (default)"
-		} else {
-			line += s.claudeConfigDir
-		}
-		main = line
-	case SettingGeminiYoloMode:
-		main = s.renderCheckbox("YOLO mode", s.geminiYoloMode) + " - Auto-approve all actions"
-	case SettingCodexYoloMode:
-		main = s.renderCheckbox("YOLO mode", s.codexYoloMode) + " - Bypass approvals and sandbox"
-	case SettingHermesYoloMode:
-		main = s.renderCheckbox("YOLO mode", s.hermesYoloMode) + " - Auto-approve all tool calls"
-	case SettingCheckForUpdates:
-		main = s.renderCheckbox("Check for updates on startup", s.checkForUpdates)
-	case SettingAutoUpdate:
-		main = s.renderCheckbox("Auto-install updates", s.autoUpdate)
-	case SettingLogMaxSize:
-		main = s.renderNumber("Max file size:", s.logMaxSizeMB, "MB")
-	case SettingLogMaxLines:
-		main = s.renderNumber("Lines to keep:", s.logMaxLines, "")
-	case SettingGlobalSearchEnabled:
-		main = s.renderCheckbox("Enabled", s.globalSearchEnabled)
-	case SettingSearchTier:
-		main = "Search tier: " + s.renderRadioGroup(tierNames, s.searchTier, focused)
-	case SettingRecentDays:
-		main = s.renderNumber("Recent days:", s.recentDays, "(0 = all)")
-	case SettingRemoveOrphans:
-		main = s.renderCheckbox("Remove orphan logs", s.removeOrphans)
-	case SettingMaintenanceEnabled:
-		main = s.renderCheckbox("Auto-maintenance", s.maintenanceEnabled)
-		hint = "Prune logs, clean backups, archive"
-	case SettingStatsEnabled:
-		main = s.renderCheckbox("Enabled", s.statsEnabled) + " - Status bar stats"
-	case SettingStatsRefresh:
-		main = s.renderNumber("Refresh interval:", s.statsRefreshSecs, "sec")
-	case SettingStatsFormat:
-		main = "Format: " + s.renderRadioGroup(statsFormatNames, s.statsFormat, focused)
-	case SettingStatsShowCPU:
-		main = s.renderCheckbox("Show CPU", s.statsShowCPU)
-	case SettingStatsShowRAM:
-		main = s.renderCheckbox("Show RAM", s.statsShowRAM)
-	case SettingStatsShowDisk:
-		main = s.renderCheckbox("Show Disk", s.statsShowDisk)
-	case SettingStatsShowNetwork:
-		main = s.renderCheckbox("Show Network", s.statsShowNetwork)
-	case SettingStatsShowGPU:
-		main = s.renderCheckbox("Show GPU", s.statsShowGPU)
-	case SettingStatsShowLoad:
-		main = s.renderCheckbox("Show Load", s.statsShowLoad)
-	case SettingSyncTitle:
-		main = s.renderCheckbox("Sync session title", s.syncTitle)
-		hint = "Let the agent rename the session"
-	case SettingShowSessionTimestamps:
-		main = s.renderCheckbox("Show session timestamps", s.showSessionTimestamps)
-		hint = "Last activity per row"
 	}
 
 	if focused {
@@ -1310,6 +1592,33 @@ func (s *SettingsPanel) renderSettingRow(setting SettingType, focused bool, widt
 		out = append(out, cellTruncate("    "+dimStyle.Render(hint), width, ""))
 	}
 	return out
+}
+
+// renderRegistryRow builds the main line and hint for a registry-driven
+// setting (settings_defs.go) purely from its kind, reusing the same checkbox /
+// radio / number widgets as the legacy settings. Literals render their typed
+// value (or a dim placeholder), with an inline edit caret while typing.
+func (s *SettingsPanel) renderRegistryRow(def *settingDef, focused bool) (string, string) {
+	switch def.kind {
+	case inputBool:
+		return s.renderCheckbox(def.label, s.newBool[def.key]), def.desc
+	case inputEnum:
+		return def.label + ": " + s.renderRadioGroup(def.enumNames, s.newEnum[def.key], focused), def.desc
+	case inputInt:
+		return s.renderNumber(def.label+":", s.newInt[def.key], def.suffix), def.desc
+	case inputLiteral:
+		line := def.label + ": "
+		switch {
+		case s.editingText && s.cursor == int(def.key):
+			line += "[" + s.textBuffer + "|]"
+		case s.newText[def.key] != "":
+			line += s.newText[def.key]
+		default:
+			line += def.placeholder
+		}
+		return line, def.desc
+	}
+	return def.label, def.desc
 }
 
 // renderCheckbox renders a checkbox with label
