@@ -1342,7 +1342,7 @@ func (s *SettingsPanel) View() string {
 	header := cellTruncate(titleLine, innerWidth, "") + "\n" + strings.Repeat("-", innerWidth)
 
 	helpBar := cellTruncate(
-		dimStyle.Render("Tab/←→ Pane · ↑↓ Move · Space Toggle · Enter Edit · Esc Close"),
+		dimStyle.Render("Tab Pane · ↑↓ Move · ←→ Pane/Adjust · Space/Enter Select · Esc Close"),
 		innerWidth, "",
 	)
 
