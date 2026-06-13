@@ -43,7 +43,7 @@ func TestSettingsPanel_ShowSessionTimestamps_ToggleAndPersist(t *testing.T) {
 
 	panel := NewSettingsPanel()
 	panel.Show()
-	panel.cursor = int(SettingShowSessionTimestamps)
+	panel.focusSetting(SettingShowSessionTimestamps)
 
 	if panel.showSessionTimestamps {
 		t.Fatal("precondition: showSessionTimestamps must start false")
@@ -71,11 +71,11 @@ func TestSettingsPanel_ShowSessionTimestamps_ToggleAndPersist(t *testing.T) {
 	}
 }
 
-// Pins the cursorToLine[SettingShowSessionTimestamps] mapping in
-// settings_panel.go: View() — if the value is off, the cursor's auto-scroll
-// stops bringing the new setting into the visible window. Render the panel
-// at a height short enough to force scroll mode, point the cursor at our
-// setting, and assert it appears in the rendered output.
+// Pins the detail-pane vertical windowing in settings_panel.go: View() — the
+// focused setting's row must be scrolled into the visible window even when the
+// pane block overflows a short viewport. Render the panel at a height short
+// enough to force scroll mode, focus the Display section's setting, and assert
+// it appears in the rendered output.
 func TestSettingsPanel_ShowSessionTimestamps_ScrollMappingBringsRowIntoView(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	session.ClearUserConfigCache()
@@ -85,7 +85,7 @@ func TestSettingsPanel_ShowSessionTimestamps_ScrollMappingBringsRowIntoView(t *t
 	// Width comfortable, height short enough to force scroll-windowing in View().
 	panel.SetSize(100, 20)
 	panel.Show()
-	panel.cursor = int(SettingShowSessionTimestamps)
+	panel.focusSetting(SettingShowSessionTimestamps)
 
 	view := panel.View()
 

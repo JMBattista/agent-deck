@@ -427,43 +427,58 @@ func TestSettingsPanel_SetSize(t *testing.T) {
 	}
 }
 
-func TestSettingsPanel_Update_Navigation(t *testing.T) {
+func TestSettingsPanel_Update_PaneNavigation(t *testing.T) {
 	panel := NewSettingsPanel()
 	panel.Show()
 
-	// Initial cursor should be at 0
-	if panel.cursor != 0 {
-		t.Errorf("Initial cursor = %d, want 0", panel.cursor)
+	// Initial focus is the section list (left pane), first section selected.
+	if panel.focusRight {
+		t.Error("Initial focus should be the section list (left pane)")
+	}
+	if panel.sectionCursor != 0 {
+		t.Errorf("Initial sectionCursor = %d, want 0", panel.sectionCursor)
 	}
 
-	// Move down
+	// Down moves the section selection in the left pane.
 	panel.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if panel.cursor != 1 {
-		t.Errorf("After down: cursor = %d, want 1", panel.cursor)
+	if panel.sectionCursor != 1 {
+		t.Errorf("After down: sectionCursor = %d, want 1", panel.sectionCursor)
+	}
+	// Selecting a section snaps the detail cursor to its first setting.
+	if panel.cursor != int(settingsSections[1].settings[0]) {
+		t.Errorf("After section move: cursor = %d, want %d", panel.cursor, settingsSections[1].settings[0])
 	}
 
-	// Move down with 'j'
-	panel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	if panel.cursor != 2 {
-		t.Errorf("After j: cursor = %d, want 2", panel.cursor)
-	}
-
-	// Move up
-	panel.Update(tea.KeyMsg{Type: tea.KeyUp})
-	if panel.cursor != 1 {
-		t.Errorf("After up: cursor = %d, want 1", panel.cursor)
-	}
-
-	// Move up with 'k'
+	// 'k' moves the section selection back up.
 	panel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	if panel.cursor != 0 {
-		t.Errorf("After k: cursor = %d, want 0", panel.cursor)
+	if panel.sectionCursor != 0 {
+		t.Errorf("After k: sectionCursor = %d, want 0", panel.sectionCursor)
 	}
 
-	// Should not go below 0
+	// Should not go above the first section.
 	panel.Update(tea.KeyMsg{Type: tea.KeyUp})
-	if panel.cursor != 0 {
-		t.Errorf("After up at 0: cursor = %d, want 0", panel.cursor)
+	if panel.sectionCursor != 0 {
+		t.Errorf("After up at 0: sectionCursor = %d, want 0", panel.sectionCursor)
+	}
+
+	// Right enters the detail pane; up/down then move within the section.
+	// Appearance has multiple settings, so detail navigation is observable.
+	panel.Update(tea.KeyMsg{Type: tea.KeyRight})
+	if !panel.focusRight {
+		t.Error("Right from section list should focus the detail pane")
+	}
+	if panel.cursor != int(settingsSections[0].settings[0]) {
+		t.Errorf("Detail cursor = %d, want first setting %d", panel.cursor, settingsSections[0].settings[0])
+	}
+	panel.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if panel.cursor != int(settingsSections[0].settings[1]) {
+		t.Errorf("After down in detail: cursor = %d, want %d", panel.cursor, settingsSections[0].settings[1])
+	}
+
+	// Tab toggles focus back to the section list.
+	panel.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if panel.focusRight {
+		t.Error("Tab should toggle focus back to the section list")
 	}
 }
 
@@ -471,8 +486,8 @@ func TestSettingsPanel_Update_ToggleCheckbox(t *testing.T) {
 	panel := NewSettingsPanel()
 	panel.Show()
 
-	// Navigate to dangerous_mode (index 2, after Theme and DefaultTool)
-	panel.cursor = int(SettingDangerousMode)
+	// Focus the dangerous-mode setting in the detail pane.
+	panel.focusSetting(SettingDangerousMode)
 	initialValue := panel.dangerousMode
 
 	// Toggle with space
@@ -495,8 +510,8 @@ func TestSettingsPanel_Update_RadioSelection(t *testing.T) {
 	panel := NewSettingsPanel()
 	panel.Show()
 
-	// Navigate to DEFAULT TOOL (index 1, after Theme)
-	panel.cursor = int(SettingDefaultTool)
+	// Focus the default-tool radio in the detail pane.
+	panel.focusSetting(SettingDefaultTool)
 	panel.selectedTool = 0 // claude
 
 	// Move right
@@ -534,8 +549,8 @@ func TestSettingsPanel_Update_NumberAdjustment(t *testing.T) {
 	panel := NewSettingsPanel()
 	panel.Show()
 
-	// Navigate to logMaxSizeMB (index 6, after Theme)
-	panel.cursor = int(SettingLogMaxSize)
+	// Focus the log max-size number in the detail pane.
+	panel.focusSetting(SettingLogMaxSize)
 	panel.logMaxSizeMB = 10
 
 	// Increase with right
@@ -597,8 +612,8 @@ func TestSettingsPanel_NeedsRestart(t *testing.T) {
 		t.Error("Should not need restart initially")
 	}
 
-	// Navigate to global search settings and change
-	panel.cursor = int(SettingGlobalSearchEnabled)
+	// Focus and toggle the global-search enabled setting.
+	panel.focusSetting(SettingGlobalSearchEnabled)
 	panel.Update(tea.KeyMsg{Type: tea.KeySpace})
 
 	if !panel.NeedsRestart() {
@@ -619,27 +634,25 @@ func TestSettingsPanel_View_Visible(t *testing.T) {
 	panel := NewSettingsPanel()
 	panel.SetSize(100, 80)
 	panel.Show()
-	panel.cursor = int(SettingMaintenanceEnabled)
 
 	view := panel.View()
 	if view == "" {
 		t.Error("View() should return non-empty string when visible")
 	}
 
-	// Check that it contains expected elements
+	// The left pane always shows the section list; the right pane shows the
+	// selected (first: Appearance) section's settings.
 	expectedElements := []string{
-		"Settings",
-		"THEME",
+		"Settings",        // title
+		"SECTIONS",        // left-pane header
+		"Appearance",      // a section name in the left pane
+		"Agents — Claude", // grouped agent section
+		"System Stats",
+		"MCP & Tools",
+		"APPEARANCE", // right-pane detail header for the selected section
+		"Theme",
 		"Dark",
 		"Light",
-		"DEFAULT TOOL",
-		"Claude",
-		"Gemini",
-		"CLAUDE",
-		"Dangerous mode",
-		"UPDATES",
-		"LOGS",
-		"GLOBAL SEARCH",
 	}
 
 	for _, elem := range expectedElements {
@@ -654,12 +667,21 @@ func TestSettingsPanel_View_HighlightsCursor(t *testing.T) {
 	panel.SetSize(80, 50) // Increased height for new settings
 	panel.Show()
 
-	// Just verify no crash with various cursor positions
+	// Render every section with focus on each setting; verify no crash.
 	for i := 0; i < settingsCount; i++ {
-		panel.cursor = i
+		panel.focusSetting(SettingType(i))
 		view := panel.View()
 		if view == "" {
-			t.Errorf("View() should return non-empty for cursor position %d", i)
+			t.Errorf("View() should return non-empty for setting %d", i)
+		}
+	}
+
+	// Also render each section with focus on the left (section list) pane.
+	for si := range settingsSections {
+		panel.sectionCursor = si
+		panel.focusRight = false
+		if view := panel.View(); view == "" {
+			t.Errorf("View() should return non-empty for section %d", si)
 		}
 	}
 }
@@ -684,8 +706,8 @@ func TestSettingsPanel_ThemeToggle(t *testing.T) {
 	panel.selectedTheme = 0
 	panel.visible = true
 
-	// Navigate right to select light
-	panel.cursor = int(SettingTheme)
+	// Focus the theme radio, then navigate right to select light.
+	panel.focusSetting(SettingTheme)
 	panel, _, shouldSave := panel.Update(tea.KeyMsg{Type: tea.KeyRight})
 
 	if panel.selectedTheme != 1 {
@@ -790,7 +812,7 @@ func TestSettingsPanel_PreviewSettings_Toggle(t *testing.T) {
 	panel.Show()
 
 	// Test Show Output toggle
-	panel.cursor = int(SettingShowOutput)
+	panel.focusSetting(SettingShowOutput)
 	initialOutput := panel.showOutput
 
 	_, _, changed := panel.Update(tea.KeyMsg{Type: tea.KeySpace})
@@ -802,7 +824,7 @@ func TestSettingsPanel_PreviewSettings_Toggle(t *testing.T) {
 	}
 
 	// Test Show Analytics toggle
-	panel.cursor = int(SettingShowAnalytics)
+	panel.focusSetting(SettingShowAnalytics)
 	initialAnalytics := panel.showAnalytics
 
 	_, _, changed = panel.Update(tea.KeyMsg{Type: tea.KeySpace})
@@ -1022,10 +1044,12 @@ func TestSettingsPanel_PreviewSettings_ViewContains(t *testing.T) {
 	panel.SetSize(80, 50)
 	panel.Show()
 
+	// Show Output / Show Analytics live in the Appearance section (selected by
+	// default after Show()).
 	view := panel.View()
 
 	expectedElements := []string{
-		"PREVIEW",
+		"APPEARANCE",
 		"Show Output",
 		"Show Analytics",
 	}
@@ -1041,15 +1065,14 @@ func TestSettingsPanel_ViewUsesConfiguredMCPHotkeyHint(t *testing.T) {
 	setSettingsPanelHotkeyConfigForTest(t, "[hotkeys]\nmcp_manager = \"ctrl+m\"\n")
 
 	panel := NewSettingsPanel()
-	// Tall viewport so the MCP hint (below many settings rows) is not clipped by scroll windowing.
 	panel.SetSize(120, 200)
 	panel.Show()
-	panel.cursor = int(SettingStatsShowLoad)
+	selectSectionByTitle(t, panel, "MCP & Tools")
 
 	view := panel.View()
 	// Hint may wrap across dialog lines; assert on stable fragments rather than one contiguous string.
-	if !containsString(view, "Press ctrl+m on any Claude, Gemini, or Cursor session") ||
-		!containsString(view, "attach MCPs") {
+	if !containsString(view, "MCP Manager hotkey: ctrl+m") ||
+		!containsString(view, "Attach MCPs") {
 		t.Fatalf("settings view should show configured MCP key hint, got %q", view)
 	}
 }
@@ -1060,10 +1083,125 @@ func TestSettingsPanel_ViewShowsUnboundMCPHotkeyHint(t *testing.T) {
 	panel := NewSettingsPanel()
 	panel.SetSize(100, 80)
 	panel.Show()
-	panel.cursor = int(SettingMaintenanceEnabled)
+	selectSectionByTitle(t, panel, "MCP & Tools")
 
 	view := panel.View()
 	if !containsString(view, "MCP Manager hotkey is unbound.") {
 		t.Fatalf("settings view should show unbound MCP key hint, got %q", view)
+	}
+}
+
+// selectSectionByTitle points the left pane at the named section (focus stays
+// on the section list).
+func selectSectionByTitle(t *testing.T, panel *SettingsPanel, title string) {
+	t.Helper()
+	for i, sec := range settingsSections {
+		if sec.title == title {
+			panel.sectionCursor = i
+			panel.focusRight = false
+			return
+		}
+	}
+	t.Fatalf("section %q not found", title)
+}
+
+// TestSettingsSectionsCoverAllSettings guards the core invariant of the
+// two-pane redesign: the editable sections together cover exactly the
+// settingsCount SettingType entries, each in exactly one section.
+func TestSettingsSectionsCoverAllSettings(t *testing.T) {
+	seen := make(map[SettingType]int)
+	for _, sec := range settingsSections {
+		if sec.info {
+			if len(sec.settings) != 0 {
+				t.Errorf("info section %q should have no settings, got %d", sec.title, len(sec.settings))
+			}
+			continue
+		}
+		for _, st := range sec.settings {
+			seen[st]++
+		}
+	}
+
+	if len(seen) != settingsCount {
+		t.Errorf("sections cover %d distinct settings, want %d", len(seen), settingsCount)
+	}
+	for i := 0; i < settingsCount; i++ {
+		st := SettingType(i)
+		switch seen[st] {
+		case 0:
+			t.Errorf("setting %d is not in any section", i)
+		case 1:
+			// exactly once — good
+		default:
+			t.Errorf("setting %d appears in %d sections, want exactly 1", i, seen[st])
+		}
+	}
+}
+
+// TestSettingsPanel_AllSettingsReachable confirms every SettingType can be
+// reached by navigating the section list and entering the detail pane — no
+// setting is orphaned by the reorganization.
+func TestSettingsPanel_AllSettingsReachable(t *testing.T) {
+	reachable := make(map[int]bool)
+	for si := range settingsSections {
+		panel := NewSettingsPanel()
+		panel.Show()
+		// Walk the section list down to section si.
+		for panel.sectionCursor < si {
+			panel.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		if panel.sectionCursor != si {
+			t.Fatalf("could not navigate to section %d (stuck at %d)", si, panel.sectionCursor)
+		}
+		// Enter the detail pane and walk every setting in the section.
+		panel.Update(tea.KeyMsg{Type: tea.KeyRight})
+		settings := settingsSections[si].settings
+		if len(settings) == 0 {
+			continue // informational section
+		}
+		if !panel.focusRight {
+			t.Fatalf("section %d (%q) should be focusable", si, settingsSections[si].title)
+		}
+		reachable[panel.cursor] = true
+		for j := 1; j < len(settings); j++ {
+			panel.Update(tea.KeyMsg{Type: tea.KeyDown})
+			reachable[panel.cursor] = true
+		}
+	}
+
+	for i := 0; i < settingsCount; i++ {
+		if !reachable[i] {
+			t.Errorf("setting %d is not reachable via pane navigation", i)
+		}
+	}
+}
+
+// TestSettingsPanel_LeftAdjustVsBack verifies the dual role of left/h in the
+// detail pane: it tunes adjustable settings but steps focus back to the
+// section list on toggle/text settings.
+func TestSettingsPanel_LeftAdjustVsBack(t *testing.T) {
+	panel := NewSettingsPanel()
+	panel.Show()
+
+	// Adjustable setting: left tunes the value, focus stays on the right.
+	panel.focusSetting(SettingLogMaxSize)
+	panel.logMaxSizeMB = 5
+	panel.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if panel.logMaxSizeMB != 4 {
+		t.Errorf("left on adjustable setting should decrement: got %d, want 4", panel.logMaxSizeMB)
+	}
+	if !panel.focusRight {
+		t.Error("left on adjustable setting should keep focus on the detail pane")
+	}
+
+	// Toggle setting: left steps focus back to the section list.
+	panel.focusSetting(SettingDangerousMode)
+	before := panel.dangerousMode
+	panel.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if panel.focusRight {
+		t.Error("left on a toggle setting should return focus to the section list")
+	}
+	if panel.dangerousMode != before {
+		t.Error("left on a toggle setting should not change its value")
 	}
 }
